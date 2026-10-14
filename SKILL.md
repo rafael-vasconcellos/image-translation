@@ -1,6 +1,6 @@
 ---
 name: image-translation
-description: Translate text embedded in image files (game UI, buttons, tab strips, menu panels, sprites, banners, signs) into another language while keeping dimensions, format, file names and artwork intact. Use this whenever the user asks to translate, localize or replace the text inside PNG/JPEG/BMP/WebP images, especially visual-novel or game UI assets with Japanese text, even if they do not mention a skill or image editing. Ships a CLI (scripts/imgtr.py) that does all the pixel work, so the agent only reads, translates, and visually verifies.
+description: Translate text embedded in image files (game UI, buttons, tab strips, menu panels, sprites, banners, signs) into another language while keeping dimensions, format, file names and artwork intact. Use this whenever the user asks to translate, localize or replace the text inside PNG/JPEG/BMP/WebP images, especially visual-novel or game UI assets with Japanese text, even if they do not mention a skill or image editing. Ships a CLI (scripts/imgtr) that does all the pixel work, so the agent only reads, translates, and visually verifies.
 compatibility: Python 3.9+ with Pillow and numpy (pip install -r scripts/requirements.txt)
 ---
 
@@ -15,7 +15,7 @@ measuring, erasing, drawing and checking, so you never write pixel code.
 
 ## The CLI
 
-Run it as `python <skill_dir>/scripts/imgtr.py <command>`, where `<skill_dir>` is the folder that
+Run it as `python <skill_dir>/scripts/imgtr <command>`, where `<skill_dir>` is the folder that
 contains this SKILL.md. Every command prints one JSON document and exits 0 (ok), 1 (usage/I-O error)
 or 2 (a check failed). `--help` on any command explains its options.
 
