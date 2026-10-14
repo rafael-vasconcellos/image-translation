@@ -8,6 +8,7 @@ How the techniques below map to `imgtr` (see `spec-format.md` for the fields):
 | Same, but no clean block of that size exists | `sample` | Draws pixels at random from a clean `ref_box`, so noise, colour correlation and alpha are reproduced. A small `std` in `analyze --box` means this is enough. |
 | Button/tab strips with a vertical gradient (3 states side by side) | `column-repeat` | Repeats one clean column (`ref_col`, cell-relative) across the text span, full cell height. Get `ref_col` and the clean runs from `analyze --cells W:N`. |
 | Several variants of the same layout whose text differs, background has structure | `consensus` | Majority vote per pixel across `variants`. Never use it on text shared by most variants (the majority IS that text). Give a `ref_box` so suspicious pixels fall back to sampling. |
+| A button whose label covers its caps (`analyze --cells` finds no repeated column) | `copy` + `column-repeat` with `source` | Rebuild the text span from a sibling with the same caps and gradient. See the cfginit example in `spec-format.md`. |
 | Solid colour | `fill` | |
 | Text over artwork, portraits, unique details | none of the above | Read items 5 and 6 below: preserve the region and report it. |
 

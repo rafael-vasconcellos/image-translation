@@ -61,6 +61,9 @@ erased first, then all the lines are drawn. A per-region erase would wipe the li
 | `column-repeat` | `ref_col`, `box?` | repeats one clean column (cell-relative `ref_col`) across the x-span of `box`, **full height of the image/cell** |
 | `consensus` | `variants[]`, `min_support?` (2), `ref_box?`, `box?` | per-pixel majority across same-size variants. Never on text shared by most variants. With `ref_box`, pixels that do not look like the background fall back to sampling |
 
+`source` (optional, for `copy`, `column-repeat` and `sample`): take the pixels from another image of the
+same dimensions instead of the image itself. Use it when the image has no clean pixels of its own.
+
 ## Style keys
 
 | key | default | notes |
@@ -115,6 +118,22 @@ Three-state button family as a preset (dark label, light drop shadow, lighter la
   "images": [ { "source": "btn_tab_sound_bt3.png",  "preset": "tab", "text": "Sound" },
               { "source": "btn_tab_system_bt3.png", "preset": "tab", "text": "System 1" } ] }
 ```
+
+A button whose label covers its own rounded caps (here columns 3..46 of a 51 px cell) has no clean column
+to repeat. Rebuild those columns from a sibling with the same caps and gradient; each cell takes its own
+state from the donor because the boxes are translated per cell:
+
+```json
+{ "source": "btn_cfginit_bt3.png", "cells": { "width": 51, "count": 3 },
+  "erase": [
+    { "cell": "all", "mode": "copy",          "offset": [0, 0], "box": [3, 0, 12, 24],  "source": "btn_end_bt3.png" },
+    { "cell": "all", "mode": "column-repeat", "ref_col": 8,     "box": [15, 0, 22, 24], "source": "btn_end_bt3.png" },
+    { "cell": "all", "mode": "copy",          "offset": [0, 0], "box": [37, 0, 10, 24], "source": "btn_end_bt3.png" } ],
+  "regions": [ { "cell": "all", "box": [7, 2, 37, 20], "text": "Reset", "size": 13 } ] }
+```
+
+Check that the donor really shares the pixels outside the text: `analyze a.png b.png` shows in `ink_bbox`
+where two same-size files differ; everything outside it is identical.
 
 ## Not supported in v0 (the CLI refuses instead of degrading)
 

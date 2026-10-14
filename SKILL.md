@@ -76,7 +76,8 @@ and tell the user; that is the only installation this skill allows.
    line and the ink colours, `--ascii` on one glyph to see outline/shadow structure, and `--cells W:N`
    for button columns. Pick the `erase.mode` from `references/reconstruction.md`. Typical case:
    translucent noisy panel gives one image-level `copy` block per text column; 3-state pill buttons give
-   `column-repeat`, and a family of identical buttons becomes a `preset`. Text over portraits, distinctive objects
+   `column-repeat`, and a family of identical buttons becomes a `preset`. If a button has no clean column
+   (`ref_col: null`), borrow the span from a sibling with `erase.source`. Text over portraits, distinctive objects
    or unique illustration details is preserved and reported, not repainted.
 5. **Pick a font and check fit.** `fonts --filter ... --sample "Your text"` and view the sheet. Choose the
    closest match in character and weight; record a fallback in the report if it affects fidelity. Then

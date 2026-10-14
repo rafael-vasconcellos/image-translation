@@ -125,6 +125,40 @@ class ImgtrTests(unittest.TestCase):
         self.assertEqual(flat["count"], 5)
         self.assertEqual(deep["count"], 6)
 
+    def test_cells_are_detected_even_when_the_pressed_state_differs_slightly(self):
+        make_strip(self.src / "btn_real.png", "END", 51)
+        im = np.array(Image.open(self.src / "btn_real.png"))
+        edge = im[:, 102, 3].astype(int)
+        im[:, 102, 3] = np.where((edge > 0) & (edge < 255), np.clip(edge + 30, 0, 255), edge)  # 3rd state
+        Image.fromarray(im).save(self.src / "btn_real.png")
+        _, r = run("inventory", str(self.src))
+        by = {i["path"]: i for i in r["images"]}
+        self.assertEqual(by["btn_real.png"]["cell_candidates"][0], {"count": 3, "width": 51})
+
+    def test_erase_source_borrows_a_clean_sibling_image(self):
+        # btn_tab.png has no clean column in its middle once we pretend text spans it all:
+        # borrow the middle of a sibling that has the same shape, then draw
+        make_strip(self.src / "btn_other.png", "OTHER", 80)
+        self.write_spec([{"source": "btn_tab.png", "cells": {"width": 80, "count": 3},
+                          "erase": [{"cell": "all", "mode": "copy", "offset": [0, 0], "box": [3, 0, 12, 24],
+                                     "source": "btn_other.png"},
+                                    {"cell": "all", "mode": "column-repeat", "ref_col": 8, "box": [15, 0, 50, 24],
+                                     "source": "btn_other.png"}],
+                          "regions": [{"cell": "all", "box": [10, 2, 60, 20], "text": "Tab", "size": 12}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        code, v = run("verify", str(self.src), str(self.out), "--spec", str(self.spec_path))
+        self.assertEqual(code, 0, v)
+
+    def test_erase_source_must_match_dimensions(self):
+        self.write_spec([{"source": "btn_end.png", "cells": {"width": 51, "count": 3},
+                          "erase": [{"cell": "all", "mode": "column-repeat", "ref_col": 8, "box": [7, 0, 37, 24],
+                                     "source": "btn_tab.png"}],
+                          "regions": [{"cell": "all", "box": [8, 3, 35, 18], "text": "x", "size": 12}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("same dimensions", r["images"][0]["error"])
+
     # ---- analyze
     def test_analyze_variants_separates_unique_text_from_shared_header(self):
         code, r = run("analyze", *(str(self.src / n) for n in ("back_a.png", "back_b.png", "back_c.png")))

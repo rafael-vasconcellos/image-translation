@@ -205,7 +205,7 @@ def consensus_of(arrs):
     return cons, support
 
 
-def detect_cells(arr, max_cells=8, min_width=8):
+def detect_cells(arr, max_cells=8, min_width=8, tol=48):
     """Find strips of N equal-width cells (button states) from edge-column alpha."""
     a = arr[..., 3]
     _, w = a.shape
@@ -221,8 +221,10 @@ def detect_cells(arr, max_cells=8, min_width=8):
         first, last = a[:, 0], a[:, cw - 1]
         if first.min() == first.max() and last.min() == last.max():
             continue  # edges carry no shape information
-        if all(np.array_equal(a[:, k * cw], first) and np.array_equal(a[:, k * cw + cw - 1], last)
-               for k in range(n)):
+        # states may differ slightly (a pressed button is a touch smaller), so compare with a tolerance
+        def close(x, y):
+            return int(np.abs(x.astype(int) - y.astype(int)).max()) <= tol
+        if all(close(a[:, k * cw], first) and close(a[:, k * cw + cw - 1], last) for k in range(n)):
             found.append({"count": n, "width": cw})
     return sorted(found, key=lambda c: -c["count"])  # finest consistent grid first
 
@@ -727,6 +729,16 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
     if mode == "fill":
         arr[y:y + h, x:x + w] = color_rgba(erase.get("color"), f"{where}.erase.color")
         return
+    donor = orig  # pixels to copy/sample from: the image itself, or erase.source (a sibling image)
+    if erase.get("source"):
+        if mode == "consensus":
+            raise CliError(f"{where}.erase.source is not used by mode 'consensus' (use 'variants')")
+        key = ("source", str(erase["source"]))
+        if key not in consensus_cache:
+            consensus_cache[key] = to_rgba(open_image(Path(src_dir) / erase["source"]))
+        donor = consensus_cache[key]
+        if donor.shape != orig.shape:
+            raise CliError(f"{where}.erase.source must have the same dimensions as the image")
     if mode == "copy":
         off = erase.get("offset")
         if (not isinstance(off, (list, tuple)) or len(off) != 2
@@ -735,9 +747,9 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
         sx, sy = x + off[0], y + off[1]
         if sx < 0 or sy < 0 or sx + w > orig.shape[1] or sy + h > orig.shape[0]:
             raise CliError(f"{where}.erase: the copy source [{sx},{sy},{w},{h}] falls outside the image")
-        if sx < x + w and x < sx + w and sy < y + h and y < sy + h:
+        if donor is orig and sx < x + w and x < sx + w and sy < y + h and y < sy + h:
             raise CliError(f"{where}.erase: the copy source overlaps the area being erased")
-        arr[y:y + h, x:x + w] = orig[sy:sy + h, sx:sx + w]
+        arr[y:y + h, x:x + w] = donor[sy:sy + h, sx:sx + w]
         return
     if mode == "column-repeat":
         if "ref_col" not in erase:
@@ -745,7 +757,7 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
         ref = int(erase["ref_col"]) + ox
         if not 0 <= ref < orig.shape[1]:
             raise CliError(f"{where}.erase.ref_col out of range")
-        arr[:, x:x + w] = orig[:, ref:ref + 1]
+        arr[:, x:x + w] = donor[:, ref:ref + 1]
         return
 
     def sample_patch():
@@ -756,9 +768,9 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
         rx, ry, rw, rh = [rb[0] + ox, rb[1], rb[2], rb[3]]
         if rx < 0 or ry < 0 or rx + rw > orig.shape[1] or ry + rh > orig.shape[0]:
             raise CliError(f"{where}.erase.ref_box falls outside the image")
-        if rx < x + w and x < rx + rw and ry < y + h and y < ry + rh:
+        if donor is orig and rx < x + w and x < rx + rw and ry < y + h and y < ry + rh:
             raise CliError(f"{where}.erase.ref_box overlaps the area being erased")
-        patch = orig[ry:ry + rh, rx:rx + rw].reshape(-1, 4)
+        patch = donor[ry:ry + rh, rx:rx + rw].reshape(-1, 4)
         spread = float(patch[:, :3].astype(float).std(axis=0).max())
         limit = float(erase.get("max_std", 12))
         if spread > limit:
