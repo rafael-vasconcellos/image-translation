@@ -12,6 +12,7 @@ Needs: Python 3.9+, Pillow, numpy.   Run `imgtr.py <command> --help` for details
 from __future__ import annotations
 
 import argparse
+import copy
 import functools
 import hashlib
 import json
@@ -29,7 +30,7 @@ except ImportError as exc:  # pragma: no cover
     sys.stderr.write(f"imgtr needs Pillow and numpy: pip install pillow numpy ({exc})\n")
     sys.exit(1)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 IMG_EXT = {".png", ".bmp", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".gif"}
 WRITE_FORMATS = {"PNG", "BMP", "JPEG", "WEBP", "TIFF"}
@@ -37,7 +38,7 @@ DEFAULT_EXCLUDES = {"translated", ".imgtr-work", ".git", "node_modules", "__pyca
 WORKDIR = ".imgtr-work"
 STYLE_KEYS = ("font", "font_index", "size", "min_size", "fit", "fill", "outline", "shadow",
               "align", "valign", "spacing", "antialias", "opacity", "dx", "dy")
-ERASE_MODES = ("none", "fill", "sample", "column-repeat", "consensus")
+ERASE_MODES = ("none", "fill", "copy", "sample", "column-repeat", "consensus")
 
 
 class CliError(Exception):
@@ -227,6 +228,52 @@ def detect_cells(arr, max_cells=8, min_width=8):
 
 
 # --------------------------------------------------------------------------- inventory
+def pack_rgba(a):
+    a = a.astype(np.uint32)
+    return (a[..., 0] << 24) | (a[..., 1] << 16) | (a[..., 2] << 8) | a[..., 3]
+
+
+def unpack_rgba(v):
+    v = int(v)
+    return [(v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255]
+
+
+def background_model(arr, sub, ref_box):
+    """(mean, std) per RGBA channel from a clean patch, else the most common colour of the box."""
+    if ref_box:
+        x, y, w, h = clamp_box(ref_box, arr.shape[1], arr.shape[0])
+        patch = arr[y:y + h, x:x + w].reshape(-1, 4).astype(float)
+        return patch.mean(axis=0), patch.std(axis=0)
+    vals, counts = np.unique(pack_rgba(sub), return_counts=True)
+    return np.array(unpack_rgba(vals[counts.argmax()]), dtype=float), np.zeros(4)
+
+
+def ink_mask(sub, mean, std, tol):
+    """Pixels that deviate from the background model in any channel, alpha included."""
+    return np.any(np.abs(sub.astype(float) - mean) > np.maximum(tol * std, 2.0), axis=-1)
+
+
+def text_lines(ink, box, merge_gap):
+    merged = []
+    for r in runs(ink.any(axis=1), True):
+        if merged and r[0] - merged[-1][1] - 1 <= merge_gap:
+            merged[-1][1] = r[1]
+        else:
+            merged.append(list(r))
+    out = []
+    for y0, y1 in merged:
+        cols = np.where(ink[y0:y1 + 1].any(axis=0))[0]
+        out.append({"y": [box[1] + y0, box[1] + y1], "x": [box[0] + int(cols.min()), box[0] + int(cols.max())],
+                    "h": y1 - y0 + 1, "w": int(cols.max() - cols.min() + 1)})
+    return out
+
+
+def ascii_map(sub, ink):
+    luma = 0.299 * sub[..., 0] + 0.587 * sub[..., 1] + 0.114 * sub[..., 2]
+    cls = np.where(luma >= 170, "#", np.where(luma <= 85, "@", "+"))
+    return ["".join(cls[y, x] if ink[y, x] else " " for x in range(sub.shape[1])) for y in range(sub.shape[0])]
+
+
 def cmd_inventory(args):
     excludes = set(DEFAULT_EXCLUDES) | set(args.exclude or [])
     root = Path(args.dir)
@@ -291,9 +338,36 @@ def cmd_analyze(args):
         if args.out_consensus:
             Image.fromarray(cons).save(args.out_consensus)
             out["variants"]["consensus_saved"] = args.out_consensus
+    if (args.lines or args.palette or args.ascii or args.ref_box) and not args.box:
+        raise CliError("--lines, --palette, --ascii and --ref-box need --box")
     if args.box:
         for entry, a in zip(out["files"], arrs):
             entry["stats"] = box_stats(a, args.box)
+            if args.lines or args.palette or args.ascii:
+                x, y, w, h = entry["stats"]["box"]
+                sub = a[y:y + h, x:x + w]
+                mean, std = background_model(a, sub, args.ref_box)
+                ink = ink_mask(sub, mean, std, args.tol)
+                entry["ink"] = {"pixels": int(ink.sum()), "bbox": bbox_of(ink),
+                                "background": {"mean": [round(float(v), 1) for v in mean],
+                                               "std": [round(float(v), 1) for v in std],
+                                               "source": "ref_box" if args.ref_box else "most_common_colour"}}
+                if entry["ink"]["bbox"]:
+                    bx = entry["ink"]["bbox"]
+                    entry["ink"]["bbox"] = [bx[0] + x, bx[1] + y, bx[2], bx[3]]
+                if args.lines:
+                    entry["lines"] = text_lines(ink, [x, y, w, h], args.merge_gap)
+                if args.palette:
+                    vals, counts = np.unique(pack_rgba(sub[ink] if ink.any() else sub.reshape(-1, 4)),
+                                             return_counts=True)
+                    top = np.argsort(-counts)[:args.palette]
+                    entry["palette"] = [{"rgba": unpack_rgba(vals[i]), "hex": "#%02x%02x%02x%02x" % tuple(unpack_rgba(vals[i])),
+                                         "count": int(counts[i])} for i in top]
+                if args.ascii:
+                    if w > 160 or h > 60:
+                        raise CliError("--ascii needs a box of at most 160x60 pixels")
+                    entry["ascii"] = ascii_map(sub, ink)
+                    entry["ascii_legend"] = "' ' background, '#' light ink, '@' dark ink, '+' mid"
     if args.cells:
         cw, n = args.cells
         for entry, a in zip(out["files"], arrs):
@@ -401,6 +475,41 @@ def cmd_fonts(args):
 
 
 # --------------------------------------------------------------------------- spec
+def expand_presets(spec):
+    """images[i].preset pulls cells/style/erase/regions from spec.presets[name]; image keys win.
+    A preset region text may contain {text}, filled from the image's own "text"."""
+    presets = spec.get("presets") or {}
+    out = []
+    for i, im in enumerate(spec["images"]):
+        name = im.get("preset")
+        if name is None:
+            out.append(im)
+            continue
+        if name not in presets:
+            raise CliError(f"images[{i}].preset {name!r} is not defined in spec.presets")
+        base = copy.deepcopy(presets[name])
+        merged = dict(base)
+        for k, v in im.items():
+            if k not in ("preset", "text"):
+                merged[k] = v
+        if isinstance(base.get("style"), dict) and isinstance(im.get("style"), dict):
+            merged["style"] = {**base["style"], **im["style"]}
+        if "regions" not in im:
+            regs = copy.deepcopy(base.get("regions") or [])
+            text = im.get("text")
+            has_ph = any("{text}" in str(r.get("text", "")) for r in regs)
+            if has_ph and text is None:
+                raise CliError(f"images[{i}] uses preset {name!r}: set its 'text'")
+            if text is not None and not has_ph:
+                raise CliError(f"images[{i}] has 'text' but preset {name!r} has no {{text}} placeholder")
+            for r in regs:
+                if text is not None:
+                    r["text"] = str(r.get("text", "")).replace("{text}", text)
+            merged["regions"] = regs
+        out.append(merged)
+    spec["images"] = out
+
+
 def load_spec(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -413,6 +522,7 @@ def load_spec(path):
         raise CliError("unsupported spec version (expected 1)")
     if not isinstance(spec.get("images"), list) or not spec["images"]:
         raise CliError("spec.images must be a non-empty list")
+    expand_presets(spec)
     return spec
 
 
@@ -426,11 +536,10 @@ def check_box(box, where, w=None, h=None):
         raise CliError(f"{where}: box {box} falls outside the {w}x{h} image/cell area")
 
 
-def geometry(img_spec, region, size, where):
-    """List of (cell, draw_box, erase_box, ox) in image coordinates for one region."""
-    w, h = size
+def cell_targets(img_spec, sel, size, where):
+    """Cell indexes a box applies to, the cell width and the usable area width."""
+    w, _ = size
     cells = img_spec.get("cells")
-    sel = region.get("cell", "all")
     if cells:
         cw, n = int(cells["width"]), int(cells["count"])
         if cw * n != w:
@@ -445,25 +554,58 @@ def geometry(img_spec, region, size, where):
             raise CliError(f"{where}.cell must be 'all', an index or a list of indexes")
         if any(i < 0 or i >= n for i in idx):
             raise CliError(f"{where}.cell out of range 0..{n - 1}")
-        area_w = cw
-    else:
-        if sel not in ("all", 0):
-            raise CliError(f"{where}: 'cell' given but the image has no 'cells'")
-        idx, cw, area_w = [0], 0, w
-    box = region.get("box")
-    check_box(box, f"{where}.box", area_w, h)
-    erase = region.get("erase")
+        return idx, cw, cw
+    if sel not in ("all", 0):
+        raise CliError(f"{where}: 'cell' given but the image has no 'cells'")
+    return [0], 0, w
+
+
+def erase_geometry(img_spec, erase, default_box, size, where, sel="all"):
+    """[(cell, erase_box, ox)] for one erase entry; cell-relative boxes are translated per cell."""
+    _, h = size
     if not isinstance(erase, dict) or erase.get("mode") not in ERASE_MODES:
-        raise CliError(f"{where}.erase.mode is required, one of {list(ERASE_MODES)} "
-                       f"(use 'none' to draw without erasing)")
-    ebox = erase.get("box", box)
-    check_box(ebox, f"{where}.erase.box", area_w, h)
+        raise CliError(f"{where}.mode is required, one of {list(ERASE_MODES)}")
+    idx, cw, area_w = cell_targets(img_spec, sel, size, where)
+    ebox = erase.get("box", default_box)
+    if ebox is None:
+        raise CliError(f"{where}.box is required for an image-level erase")
+    check_box(ebox, f"{where}.box", area_w, h)
     out = []
     for c in idx:
-        ox = c * cw if cells else 0
+        ox = c * cw if img_spec.get("cells") else 0
         eb = [ebox[0] + ox, 0, ebox[2], h] if erase["mode"] == "column-repeat" \
             else [ebox[0] + ox, ebox[1], ebox[2], ebox[3]]
-        out.append((c, [box[0] + ox, box[1], box[2], box[3]], eb, ox))
+        out.append((c, eb, ox))
+    return out
+
+
+def region_geometry(img_spec, region, size, where):
+    """[(cell, draw_box, erase_box or None, ox)] for one region."""
+    sel = region.get("cell", "all")
+    idx, cw, area_w = cell_targets(img_spec, sel, size, where)
+    box = region.get("box")
+    check_box(box, f"{where}.box", area_w, size[1])
+    erases = {}
+    if region.get("erase") is not None:
+        erases = {c: eb for c, eb, _ in erase_geometry(img_spec, region["erase"], box, size,
+                                                        f"{where}.erase", sel)}
+    out = []
+    for c in idx:
+        ox = c * cw if img_spec.get("cells") else 0
+        out.append((c, [box[0] + ox, box[1], box[2], box[3]], erases.get(c), ox))
+    return out
+
+
+def image_erases(img_spec, size, where):
+    """[(entry, cell, erase_box, ox)] for the image-level 'erase' list (applied before any region)."""
+    entries = img_spec.get("erase") or []
+    if not isinstance(entries, list):
+        raise CliError(f"{where}.erase must be a list of erase entries")
+    out = []
+    for ei, entry in enumerate(entries):
+        for c, eb, ox in erase_geometry(img_spec, entry, None, size, f"{where}.erase[{ei}]",
+                                        (entry or {}).get("cell", "all")):
+            out.append((entry, c, eb, ox))
     return out
 
 
@@ -483,6 +625,13 @@ def get_font(path, size, index):
         raise CliError(f"font not found or unreadable: {path!r} (use `imgtr fonts --filter NAME`)")
 
 
+def shadows_of(st):
+    sh = st.get("shadow")
+    if not sh:
+        return []
+    return list(sh) if isinstance(sh, list) else [sh]
+
+
 def layout_text(text, st, bw, bh, where):
     if not st.get("font"):
         raise CliError(f"{where}: no 'font' (set it in defaults or in the region)")
@@ -490,12 +639,11 @@ def layout_text(text, st, bw, bh, where):
         raise CliError(f"{where}: no 'size'")
     outline = st.get("outline") or None
     sw = int(outline.get("width", 1)) if outline else 0
-    shadow = st.get("shadow") or None
-    soff = tuple(shadow.get("offset", [1, 1])) if shadow else (0, 0)
+    soffs = [tuple(x.get("offset", [1, 1])) for x in shadows_of(st)]
     spacing = int(st.get("spacing", 4))
     align, valign = st.get("align", "center"), st.get("valign", "middle")
-    if align not in ("left", "center", "right") or valign not in ("top", "middle", "bottom"):
-        raise CliError(f"{where}: align must be left|center|right and valign top|middle|bottom")
+    if align not in ("left", "center", "right") or valign not in ("top", "middle", "bottom", "metrics", "origin"):
+        raise CliError(f"{where}: align must be left|center|right and valign top|middle|bottom|metrics|origin")
     requested = int(st["size"])
     min_size = int(st.get("min_size", max(6, requested - 4)))
     sizes = range(requested, min_size - 1, -1) if st.get("fit", "shrink") == "shrink" else [requested]
@@ -510,10 +658,16 @@ def layout_text(text, st, bw, bh, where):
                                               align=align, stroke_width=sw)
         tw, th = r - l, b - t
         ix = {"left": 0, "center": (bw - tw) // 2, "right": bw - tw}[align] + dx
-        iy = {"top": 0, "middle": (bh - th) // 2, "bottom": bh - th}[valign] + dy
+        if valign in ("metrics", "origin") and "\n" not in text:
+            # line-box placement: the baseline lands on the same row for any text of this font size
+            asc, desc = font.getmetrics()
+            oy = (bh - (asc + desc)) // 2 if valign == "metrics" else 0
+            iy = oy + t + dy
+        else:
+            iy = {"top": 0, "middle": (bh - th) // 2, "bottom": bh - th}.get(valign, (bh - th) // 2) + dy
         ink = [ix, iy, ix + tw, iy + th]
-        sink = [ink[0] + soff[0], ink[1] + soff[1], ink[2] + soff[0], ink[3] + soff[1]]
-        fits = all(b_[0] >= 0 and b_[1] >= 0 and b_[2] <= bw and b_[3] <= bh for b_ in (ink, sink))
+        sinks = [[ink[0] + o[0], ink[1] + o[1], ink[2] + o[0], ink[3] + o[1]] for o in soffs]
+        fits = all(b_[0] >= 0 and b_[1] >= 0 and b_[2] <= bw and b_[3] <= bh for b_ in [ink] + sinks)
         last = {"font": font, "size": s, "origin": (l, t), "ink": ink, "sw": sw, "spacing": spacing,
                 "align": align, "antialias": antialias, "fits": fits, "need": [tw, th],
                 "requested": requested}
@@ -557,8 +711,7 @@ def render_layer(bw, bh, text, st, lay, where):
     fill_mask = mask(0)
     outline_mask = mask(lay["sw"]) if lay["sw"] else None
     layer = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
-    shadow = st.get("shadow")
-    if shadow:
+    for shadow in shadows_of(st):
         layer = Image.alpha_composite(layer, ink(outline_mask or fill_mask, shadow.get("color", "#000000"),
                                                  tuple(shadow.get("offset", [1, 1]))))
     if outline_mask is not None:
@@ -573,6 +726,18 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
         return
     if mode == "fill":
         arr[y:y + h, x:x + w] = color_rgba(erase.get("color"), f"{where}.erase.color")
+        return
+    if mode == "copy":
+        off = erase.get("offset")
+        if (not isinstance(off, (list, tuple)) or len(off) != 2
+                or not all(isinstance(v, int) and not isinstance(v, bool) for v in off)):
+            raise CliError(f"{where}.erase.offset must be [dx, dy] integers for mode 'copy'")
+        sx, sy = x + off[0], y + off[1]
+        if sx < 0 or sy < 0 or sx + w > orig.shape[1] or sy + h > orig.shape[0]:
+            raise CliError(f"{where}.erase: the copy source [{sx},{sy},{w},{h}] falls outside the image")
+        if sx < x + w and x < sx + w and sy < y + h and y < sy + h:
+            raise CliError(f"{where}.erase: the copy source overlaps the area being erased")
+        arr[y:y + h, x:x + w] = orig[sy:sy + h, sx:sx + w]
         return
     if mode == "column-repeat":
         if "ref_col" not in erase:
@@ -689,20 +854,33 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
     regions = img_spec.get("regions")
     if not isinstance(regions, list) or not regions:
         raise CliError(f"{where}.regions must be a non-empty list")
+    if not img_spec.get("erase") and not all(r.get("erase") is not None for r in regions):
+        raise CliError(f"{where}: declare 'erase' on the image or on every region "
+                       f"(use mode 'none' to draw without erasing)")
+    erase_report = []
+    for ei, (entry, cell, ebox, ox) in enumerate(image_erases(img_spec, (w, h), where)):
+        ew = []
+        erase_box_pixels(arr, orig, entry, ebox, ox, [str(seed), name, "image", str(ei), str(cell)],
+                         f"{where}.erase[{ei}]", consensus_cache, src_dir, ew)
+        erase_report.append({"mode": entry["mode"], "cell": cell if img_spec.get("cells") else None,
+                             "box": ebox, **({"warnings": ew} if ew else {})})
     for ri, region in enumerate(regions):
         rwhere = f"{where}.regions[{ri}]"
         text = region.get("text")
         if not isinstance(text, str) or not text:
             raise CliError(f"{rwhere}.text is required")
-        for cell, dbox, ebox, ox in geometry(img_spec, region, (w, h), rwhere):
+        for cell, dbox, ebox, ox in region_geometry(img_spec, region, (w, h), rwhere):
             st = style_for(spec, img_spec, region, cell)
             warns = []
-            erase_box_pixels(arr, orig, region["erase"], ebox, ox, [str(seed), name, str(ri), str(cell)],
-                             rwhere, consensus_cache, src_dir, warns)
+            if ebox is not None:
+                erase_box_pixels(arr, orig, region["erase"], ebox, ox,
+                                 [str(seed), name, str(ri), str(cell)], rwhere, consensus_cache,
+                                 src_dir, warns)
             lay = layout_text(text, st, dbox[2], dbox[3], rwhere)
             entry = {"region": ri, "cell": cell if img_spec.get("cells") else None, "text": text,
-                     "erase_mode": region["erase"]["mode"], "requested_size": lay["requested"],
-                     "size_used": lay["size"]}
+                     "requested_size": lay["requested"], "size_used": lay["size"]}
+            if region.get("erase") is not None:
+                entry["erase_mode"] = region["erase"]["mode"]
             if lay["size"] != lay["requested"]:
                 warns.append(f"shrunk from {lay['requested']} to {lay['size']}")
             if not lay["fits"]:
@@ -725,6 +903,8 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
     if stray:
         raise CliError(f"{name}: internal error, {stray} pixels changed outside the declared boxes")
     result = {"source": name, "regions": report}
+    if erase_report:
+        result["erase"] = erase_report
     if overflow and not allow_overflow:
         result["status"] = "overflow"
         result["ok"] = False
@@ -749,10 +929,14 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
 def allowed_mask(img_spec, size):
     w, h = size
     mask = np.zeros((h, w), dtype=bool)
+    for _, _, eb, _ in image_erases(img_spec, size, "image"):
+        mask[eb[1]:eb[1] + eb[3], eb[0]:eb[0] + eb[2]] = True
     for ri, region in enumerate(img_spec.get("regions") or []):
-        for _, dbox, ebox, _ in geometry(img_spec, region, size, f"regions[{ri}]"):
-            for x, y, bw, bh in (dbox, ebox):
-                mask[y:y + bh, x:x + bw] = True
+        for _, dbox, ebox, _ in region_geometry(img_spec, region, size, f"regions[{ri}]"):
+            for box in (dbox, ebox):
+                if box is not None:
+                    x, y, bw, bh = box
+                    mask[y:y + bh, x:x + bw] = True
     return mask
 
 
@@ -873,6 +1057,23 @@ def cmd_verify(args):
     return 0 if ok else 2
 
 
+def cmd_measure(args):
+    font = get_font(args.font, args.size, args.font_index)
+    probe = ImageDraw.Draw(Image.new("L", (1, 1)))
+    asc, desc = font.getmetrics()
+    rows = []
+    for text in args.text:
+        l, t, r, b = probe.multiline_textbbox((0, 0), text, font=font, spacing=args.spacing,
+                                              stroke_width=args.stroke)
+        row = {"text": text, "width": r - l, "height": b - t}
+        if args.max_width:
+            row["fits"] = (r - l) <= args.max_width
+        rows.append(row)
+    emit({"ok": True, "font": args.font, "size": args.size, "stroke": args.stroke,
+          "ascent": asc, "descent": desc, "results": rows}, args.pretty)
+    return 0
+
+
 def cmd_clean(args):
     p = Path(WORKDIR)
     existed = p.is_dir()
@@ -905,6 +1106,12 @@ def build_parser():
     s.add_argument("--cells", type=cells_arg, help="WIDTH:COUNT, e.g. 51:3")
     s.add_argument("--ref-col", type=int, help="cell-relative reference column (default: most repeated)")
     s.add_argument("--out-consensus", help="save the consensus image here")
+    s.add_argument("--ref-box", type=box_arg, help="x,y,w,h of a clean background patch (for --lines/--palette/--ascii)")
+    s.add_argument("--tol", type=float, default=4.0, help="ink = deviates from the patch by > tol*std (min 2)")
+    s.add_argument("--lines", action="store_true", help="with --box: split the ink into text lines (y/x ranges)")
+    s.add_argument("--merge-gap", type=int, default=1, help="merge lines closer than N empty rows (default 1)")
+    s.add_argument("--palette", type=int, metavar="N", help="with --box: the N most common ink colours")
+    s.add_argument("--ascii", action="store_true", help="with --box (max 160x60): character map of the ink")
     s.set_defaults(func=cmd_analyze)
 
     s = sub.add_parser("crop", help="enlarged crop over a checkerboard, for looking at small text")
@@ -924,6 +1131,16 @@ def build_parser():
     s.add_argument("--size", type=int, default=18)
     s.add_argument("--out", help=f"default: {WORKDIR}/font_sample.png")
     s.set_defaults(func=cmd_fonts)
+
+    s = sub.add_parser("measure", help="width/height of candidate translations in a font, before building a spec")
+    s.add_argument("text", nargs="+")
+    s.add_argument("--font", required=True)
+    s.add_argument("--font-index", type=int, default=0)
+    s.add_argument("--size", type=int, required=True)
+    s.add_argument("--stroke", type=int, default=0, help="outline width, included in the measure")
+    s.add_argument("--spacing", type=int, default=4)
+    s.add_argument("--max-width", type=int, help="report fits=true/false against this width")
+    s.set_defaults(func=cmd_measure)
 
     s = sub.add_parser("apply", help="erase source text and draw the translation, as described by a spec",
                        description="See references/spec-format.md. Never writes into --src.")

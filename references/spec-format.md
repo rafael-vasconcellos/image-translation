@@ -6,7 +6,7 @@ translation table once, you can review it, and `apply` / `verify` both read it.
 ## Coordinates
 
 Every box is `[x, y, w, h]` in pixels, origin top-left. When an image declares `cells`, all boxes in
-its regions are **cell-relative** and are translated to each targeted cell automatically.
+its regions and erase entries are **cell-relative** and are translated to each targeted cell.
 
 ## Top level
 
@@ -14,7 +14,8 @@ its regions are **cell-relative** and are translated to each targeted cell autom
 {
   "version": 1,
   "seed": 1,
-  "defaults": { "font": "C:/Windows/Fonts/arial.ttf", "size": 14, "fill": "#ffffff" },
+  "defaults": { "font": "C:/Windows/Fonts/segoeuib.ttf", "size": 14, "fill": "#ffffff" },
+  "presets": { "tab": { ... } },
   "images": [ ... ]
 }
 ```
@@ -25,32 +26,40 @@ its regions are **cell-relative** and are translated to each targeted cell autom
 |---|---|
 | `source` | path relative to `--src`; the output mirrors it under `--out` |
 | `cells` | `{ "width": 51, "count": 3 }` for strips of equal-width states (normal/hover/pressed). `width*count` must equal the image width |
+| `erase` | list of erase entries applied **once, before any text is drawn** (see below) |
 | `style` | optional style overrides for every region of this image |
-| `regions` | list of regions (below) |
+| `regions` | list of regions to draw (below) |
+| `preset`, `text` | pull `cells`/`style`/`erase`/`regions` from `presets[name]`; `text` fills `{text}` in the preset regions. Any key you also write on the image wins |
+
+**Rule:** every image must say how its old text goes away: either an image-level `erase` list, or an
+`erase` on every region. `{ "mode": "none" }` is the explicit way to draw without erasing.
+
+Prefer the image-level list when several lines share one background (a settings panel): one block is
+erased first, then all the lines are drawn. A per-region erase would wipe the lines drawn before it.
 
 ## Region
 
 | key | meaning |
 |---|---|
 | `text` | the translation. `\n` makes a line break |
-| `box` | where the new text must fit (also the default erase area) |
+| `box` | where the new text must fit (also the default area of a region-level `erase`) |
 | `cell` | `"all"` (default), an index, or a list of indexes. Only for images with `cells` |
-| `erase` | **required**: `{ "mode": ..., ... }`, see below. Use `"none"` to draw on an already blank area |
-| style keys | any of the style keys below, overriding `defaults` and the image `style` |
-| `state_overrides` | `{ "2": { "dy": 1, "fill": "#dddddd" } }`: style per cell index (pressed = shifted/dimmer) |
+| `erase` | optional erase entry for this region only |
+| style keys | any style key below, overriding `defaults`, the preset and the image `style` |
+| `state_overrides` | `{ "2": { "fill": "#9f9fbf" } }`: style per cell index (pressed = lighter/shifted) |
 
-## Erase modes
+## Erase entries
+
+`{ "mode": ..., ... }`. An image-level entry also needs `box` and may have `cell`.
 
 | mode | fields | what it does |
 |---|---|---|
 | `none` | | nothing |
 | `fill` | `color` | solid colour (`#rrggbb` or `#rrggbbaa`) |
-| `sample` | `ref_box`, `box?`, `max_std?` | fills the area with pixels drawn at random (seeded, reproducible) from a clean patch. Warns if the patch is not homogeneous (`max_std`, default 12) |
+| `copy` | `offset: [dx, dy]`, `box?` | copies the same-size block from the original at `box + offset`. Row-aligned, so noise and any vertical structure survive. The source must be inside the image and must not overlap the erased block. **Check that it is clean** (`analyze --box` on it) |
+| `sample` | `ref_box`, `box?`, `max_std?` | fills with pixels drawn at random (seeded, reproducible) from a clean patch. Use when no clean block of the right size exists. Warns if the patch is not homogeneous (`max_std`, default 12) |
 | `column-repeat` | `ref_col`, `box?` | repeats one clean column (cell-relative `ref_col`) across the x-span of `box`, **full height of the image/cell** |
-| `consensus` | `variants[]`, `min_support?` (2), `ref_box?`, `box?` | per-pixel majority across same-size variants; with `ref_box`, pixels that do not look like the background fall back to sampling |
-
-`box` inside `erase` overrides the erase area (default: the region `box`). Use it when the old text was
-larger than the room the new text needs.
+| `consensus` | `variants[]`, `min_support?` (2), `ref_box?`, `box?` | per-pixel majority across same-size variants. Never on text shared by most variants. With `ref_box`, pixels that do not look like the background fall back to sampling |
 
 ## Style keys
 
@@ -63,8 +72,9 @@ larger than the room the new text needs.
 | `fit` | `"shrink"` | `"none"` never shrinks. If text still overflows at `min_size`, the image is **not written** |
 | `fill` | `#ffffff` | solid colour, optional alpha |
 | `outline` | none | `{ "color": "#000000", "width": 1 }` |
-| `shadow` | none | `{ "color": "#000000a0", "offset": [1, 1] }`, must stay inside `box` |
-| `align` / `valign` | `center` / `middle` | `left\|center\|right`, `top\|middle\|bottom`; the ink (outline included) is aligned |
+| `shadow` | none | one `{ "color": "#1e2d55dc", "offset": [1, 1] }` or a **list** of them (drawn in order). Must stay inside `box` |
+| `align` | `center` | `left\|center\|right`: the ink (outline included) is aligned horizontally |
+| `valign` | `middle` | `top\|middle\|bottom` align the ink box. **`metrics`** centres the font's line box (ascent+descent) and **`origin`** puts its top at the box top: the baseline then lands on the same row for any text of that font size. Use them for lists of lines, otherwise "Voice" and "Display" drift by the descender |
 | `spacing` | 4 | line spacing for multi-line text |
 | `dx`, `dy` | 0 | nudge after alignment (e.g. pressed state) |
 | `opacity` | 1.0 | multiplies the colour alpha |
@@ -75,28 +85,35 @@ and only the pixels the text covers change. Output is deterministic (same spec +
 
 ## Examples
 
-Noisy semi-transparent panel, header shared by all variants (so: `sample`, not `consensus`):
+Settings panel (noisy translucent plate): one `copy` block per text column, then every line drawn.
+Values below come from a real working session (Segoe UI Bold, dark outline title, light body with a
+double drop shadow):
 
 ```json
 { "source": "back_sound.png",
+  "erase": [
+    { "mode": "copy", "box": [20, 20, 190, 50],  "offset": [380, 0] },
+    { "mode": "copy", "box": [75, 88, 255, 277], "offset": [325, 0] } ],
   "regions": [
-    { "box": [90, 18, 220, 34], "text": "Environment Settings", "size": 20, "align": "left",
-      "erase": { "mode": "sample", "ref_box": [400, 300, 120, 120] } },
-    { "box": [88, 96, 220, 30], "text": "Master Volume", "align": "left",
-      "erase": { "mode": "consensus",
-                 "variants": ["back_sound.png", "back_system.png", "back_text.png"],
-                 "ref_box": [400, 300, 120, 120] } } ] }
+    { "box": [25, 24, 190, 40], "text": "SETTINGS", "size": 28, "align": "left",
+      "outline": { "color": "#000000", "width": 3 } },
+    { "box": [88, 94, 250, 24], "text": "Master Volume", "size": 15, "align": "left", "valign": "metrics",
+      "fill": "#dae4ff",
+      "shadow": [ { "color": "#1e2d55dc", "offset": [1, 1] }, { "color": "#1e2d558c", "offset": [1, 2] } ] } ] }
 ```
 
-Three-state button strip:
+Three-state button family as a preset (dark label, light drop shadow, lighter label when pressed):
 
 ```json
-{ "source": "btn_end_bt3.png", "cells": { "width": 51, "count": 3 },
-  "regions": [
-    { "cell": "all", "box": [8, 3, 35, 18], "text": "Exit", "size": 12,
-      "erase": { "mode": "column-repeat", "ref_col": 8 },
-      "outline": { "color": "#000000", "width": 1 },
-      "state_overrides": { "2": { "dy": 1 } } } ] }
+{ "presets": { "tab": {
+    "cells": { "width": 80, "count": 3 },
+    "erase": [ { "cell": "all", "mode": "column-repeat", "ref_col": 10, "box": [7, 0, 66, 24] } ],
+    "style": { "size": 13, "fill": "#3f3f7f", "shadow": { "color": "#ffffffc8", "offset": [1, 1] } },
+    "regions": [ { "cell": "all", "box": [7, 2, 66, 20], "text": "{text}",
+                   "state_overrides": { "2": { "fill": "#9f9fbf",
+                                               "shadow": { "color": "#ffffffb4", "offset": [1, 1] } } } } ] } },
+  "images": [ { "source": "btn_tab_sound_bt3.png",  "preset": "tab", "text": "Sound" },
+              { "source": "btn_tab_system_bt3.png", "preset": "tab", "text": "System 1" } ] }
 ```
 
 ## Not supported in v0 (the CLI refuses instead of degrading)

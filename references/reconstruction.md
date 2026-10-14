@@ -4,13 +4,14 @@ How the techniques below map to `imgtr` (see `spec-format.md` for the fields):
 
 | Situation | `erase.mode` | Notes |
 |---|---|---|
-| Flat or finely noisy background (panel, plate) | `sample` | Draws pixels at random from a clean `ref_box`, so noise, colour correlation and alpha are reproduced exactly. Check `analyze --box` on the patch first: a small `std` means this is enough. |
+| Flat or finely noisy background (panel, plate) | `copy` | Copies a same-size block from a clean area of the same image (`offset`), row-aligned, so the real texture, alpha and any vertical structure survive. This is what worked in practice: one `copy` block per text column, then draw all lines. Check the source block with `analyze --box` first (small `std`, no ink). |
+| Same, but no clean block of that size exists | `sample` | Draws pixels at random from a clean `ref_box`, so noise, colour correlation and alpha are reproduced. A small `std` in `analyze --box` means this is enough. |
 | Button/tab strips with a vertical gradient (3 states side by side) | `column-repeat` | Repeats one clean column (`ref_col`, cell-relative) across the text span, full cell height. Get `ref_col` and the clean runs from `analyze --cells W:N`. |
 | Several variants of the same layout whose text differs, background has structure | `consensus` | Majority vote per pixel across `variants`. Never use it on text shared by most variants (the majority IS that text). Give a `ref_box` so suspicious pixels fall back to sampling. |
 | Solid colour | `fill` | |
 | Text over artwork, portraits, unique details | none of the above | Read items 5 and 6 below: preserve the region and report it. |
 
-Stop rule: at most two attempts per technique. `sample` is the floor, not a failure; if the
+Stop rule: at most two attempts per technique. `copy`/`sample` is the floor, not a failure; if the
 background is noise-like, do not investigate periodicity, tiling or inpainting.
 
 ---
@@ -48,3 +49,4 @@ For any reconstruction method:
 3. Inspect the representative result at native resolution and, when relevant, at its likely display size over a representative background.
 4. Reuse accepted reconstruction and typography settings only for images whose layout and visual treatment genuinely match. Apply explicit per-image differences rather than assuming all variants are identical.
 5. If a representative fails, improve the method before applying it to the rest of the family.
+

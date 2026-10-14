@@ -23,7 +23,8 @@ or 2 (a check failed). `--help` on any command explains its options.
 |---|---|
 | `inventory [dir]` | list images: size, mode, alpha values, bit depth, **cell-grid candidates** for button strips, duplicates |
 | `crop IMG --box x,y,w,h --scale 4 [--cells W:N]` | get an enlarged view (over a checkerboard) of small text |
-| `analyze FILES... [--box ..] [--cells W:N]` | compare variants of one layout, read background stats, find clean columns in buttons |
+| `analyze FILES... [--box ..] [--ref-box ..] [--lines] [--palette N] [--ascii] [--cells W:N]` | measure the original: text line positions, ink colours, outline/shadow as a character map, background stats, clean columns in buttons, variant comparison |
+| `measure --font F --size N [--stroke W] [--max-width W] TEXT...` | width/height of candidate translations before writing the spec |
 | `fonts --filter NAME [--sample "text" --size N]` | find installed fonts and view a specimen sheet |
 | `apply translations.json --src . --out translated` | erase the source text and draw the translation |
 | `verify . translated --spec translations.json --compare` | prove nothing changed outside the edit boxes; write side-by-side sheets |
@@ -70,17 +71,23 @@ and tell the user; that is the only installation this skill allows.
    keep related controls consistent, keep names/brands/identifiers/URLs/numbers/universal symbols.
    Record everything in `translations.json` (format in `references/spec-format.md`): this table is
    your per-image inventory.
-4. **Measure, then choose how to erase.** Use `analyze` (variants for the ink bounding box,
-   `--box` on a clean patch for background stats, `--cells` for button columns) and pick the
-   `erase.mode` from the table in `references/reconstruction.md`. Typical case: translucent noisy panel
-   gives `sample`; 3-state pill buttons give `column-repeat`. Text over portraits, distinctive objects
+4. **Measure the original, then choose how to erase.** Do not eyeball positions or colours. Use
+   `analyze IMG --box <text column> --ref-box <clean patch> --lines --palette 4` for the position of each
+   line and the ink colours, `--ascii` on one glyph to see outline/shadow structure, and `--cells W:N`
+   for button columns. Pick the `erase.mode` from `references/reconstruction.md`. Typical case:
+   translucent noisy panel gives one image-level `copy` block per text column; 3-state pill buttons give
+   `column-repeat`, and a family of identical buttons becomes a `preset`. Text over portraits, distinctive objects
    or unique illustration details is preserved and reported, not repainted.
-5. **Pick a font.** `fonts --filter ... --sample "Your text"` and view the sheet. Choose the closest
-   match in character and weight; record a fallback in the report if it affects fidelity.
+5. **Pick a font and check fit.** `fonts --filter ... --sample "Your text"` and view the sheet. Choose the
+   closest match in character and weight; record a fallback in the report if it affects fidelity. Then
+   `measure` your candidate translations against the available width, and reword now rather than after
+   `apply` reports an overflow. For lists of lines use `valign: metrics` so baselines do not drift.
 6. **One representative first.** Run `apply --only <one image> ...`, then `verify --spec --compare --only
    <it>`, and view the sheet. Complete one representative per distinct background/layout, including the
    hard cases (longest translation, smallest text, 3-state strips, translucent panels). Fix the method
-   before applying it to the rest of the family. See `references/validation.md` for what to look for.
+   before applying it to the rest of the family. After `apply`, run the leftover-ink check from
+   `references/validation.md` (`analyze` on the output: line count must equal regions drawn). See that
+   file for the rest of what to look for.
 7. **Batch.** `apply` everything, `verify` everything, repair what fails.
 8. **Report and clean.** Write the report, run `clean`.
 
@@ -132,3 +139,4 @@ checked with `verify` (exit 0) and its compare sheet viewed; all strings reviewe
 - `references/reconstruction.md`: choosing how to erase text, and the full technique ladder. Read at step 4 or when text sits over artwork.
 - `references/typography.md`: matching fonts, fitting longer translations, preserving alpha and protected content.
 - `references/validation.md`: what `verify` proves, and the visual checklist it cannot do for you.
+

@@ -207,7 +207,7 @@ class ImgtrTests(unittest.TestCase):
         self.write_spec([{"source": "btn_end.png", "regions": [{"box": [8, 3, 35, 18], "text": "x"}]}])
         code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
         self.assertEqual(code, 2)
-        self.assertIn("erase.mode", r["images"][0]["error"])
+        self.assertIn("declare 'erase'", r["images"][0]["error"])
 
     def test_output_is_deterministic(self):
         self.write_spec([self.panel_entry()])
@@ -242,6 +242,115 @@ class ImgtrTests(unittest.TestCase):
         code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
         res = r["images"][0]
         self.assertTrue(res.get("warnings") is None or any("mode_changed" in w for w in res["warnings"]))
+
+    # ---- v0.2 additions (learned from a real agent session)
+    def test_analyze_lines_palette_and_ascii(self):
+        code, r = run("analyze", str(self.src / "back_a.png"), "--box", "80,90,300,100",
+                      "--ref-box", "300,250,100,100", "--lines", "--palette", "3")
+        self.assertEqual(code, 0, r)
+        f = r["files"][0]
+        self.assertEqual(len(f["lines"]), 2)
+        self.assertTrue(95 <= f["lines"][0]["y"][0] <= 105 and 135 <= f["lines"][1]["y"][0] <= 145)
+        self.assertIn([255, 255, 255, 255], [c["rgba"] for c in f["palette"]])
+        code, r = run("analyze", str(self.src / "back_a.png"), "--box", "85,98,100,30",
+                      "--ref-box", "300,250,100,100", "--ascii")
+        rows = r["files"][0]["ascii"]
+        self.assertEqual((len(rows), len(rows[0])), (30, 100))
+        self.assertTrue(any("#" in row for row in rows))
+
+    def test_copy_mode_erases_from_a_clean_area_of_the_same_image(self):
+        self.write_spec([{"source": "back_a.png", "regions": [
+            {"box": [20, 18, 240, 34], "text": " ", "erase": {"mode": "copy", "offset": [380, 0]}}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        patch = np.array(Image.open(self.out / "back_a.png"))[18:52, 20:260]
+        self.assertLess(int(patch[..., 0].max()), 80)
+        code, v = run("verify", str(self.src), str(self.out), "--spec", str(self.spec_path))
+        self.assertEqual(code, 0, v)
+
+    def test_copy_mode_rejects_overlapping_source(self):
+        self.write_spec([{"source": "back_a.png", "regions": [
+            {"box": [20, 18, 240, 34], "text": "x", "erase": {"mode": "copy", "offset": [100, 0]}}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("overlaps", r["images"][0]["error"])
+
+    def test_one_erase_block_for_many_lines_keeps_every_line(self):
+        self.write_spec([{"source": "back_a.png",
+                          "erase": [{"mode": "copy", "box": [85, 95, 300, 80], "offset": [400, 0]}],
+                          "regions": [{"box": [88, 98, 200, 30], "text": "Master", "align": "left"},
+                                      {"box": [88, 138, 200, 30], "text": "Volume", "align": "left"}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        out = np.array(Image.open(self.out / "back_a.png"))
+        for y0 in (98, 138):  # both lines survive: erasing happens once, before any drawing
+            self.assertGreater(int((out[y0:y0 + 30, 88:288, 0] > 200).sum()), 20)
+        code, v = run("verify", str(self.src), str(self.out), "--spec", str(self.spec_path))
+        self.assertEqual(code, 0, v)
+
+    def test_region_erase_is_optional_only_if_the_image_erases(self):
+        self.write_spec([{"source": "back_a.png", "regions": [{"box": [88, 98, 200, 30], "text": "x"}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("declare 'erase'", r["images"][0]["error"])
+
+    def test_presets_turn_a_button_family_into_one_line_each(self):
+        Image.open(self.src / "btn_end.png").save(self.src / "btn_end2.png")
+        preset = {"cells": {"width": 51, "count": 3},
+                  "erase": [{"cell": "all", "mode": "column-repeat", "ref_col": 8, "box": [7, 0, 37, 24]}],
+                  "style": {"size": 12},
+                  "regions": [{"cell": "all", "box": [8, 3, 35, 18], "text": "{text}"}]}
+        self.write_spec([{"source": "btn_end.png", "preset": "pill", "text": "Exit"},
+                         {"source": "btn_end2.png", "preset": "pill", "text": "Quit"}], presets={"pill": preset})
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        a, b = (np.array(Image.open(self.out / n)) for n in ("btn_end.png", "btn_end2.png"))
+        self.assertFalse(np.array_equal(a, b))
+        code, v = run("verify", str(self.src), str(self.out), "--spec", str(self.spec_path))
+        self.assertEqual(code, 0, v)
+
+    def test_preset_text_placeholder_is_checked(self):
+        self.write_spec([{"source": "btn_end.png", "preset": "p"}],
+                        presets={"p": {"regions": [{"box": [8, 3, 35, 18], "text": "{text}"}]}})
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 1)
+        self.assertIn("text", r["error"])
+
+    def _blank(self, name):
+        Image.new("RGBA", (100, 40), (50, 50, 50, 255)).save(self.src / name)
+
+    def _top_ink_row(self, path):
+        a = np.array(Image.open(path))
+        return int(np.where((a[..., 0] > 200).any(axis=1))[0].min())
+
+    def test_valign_metrics_gives_the_same_baseline_for_any_text(self):
+        for n in ("blank_a.png", "blank_b.png"):
+            self._blank(n)
+        base = {"box": [0, 0, 100, 40], "size": 20, "align": "left", "erase": {"mode": "none"}}
+        for mode, outdir in (("metrics", "m"), ("middle", "c")):
+            self.write_spec([{"source": "blank_a.png", "regions": [dict(base, text="HHH", valign=mode)]},
+                             {"source": "blank_b.png", "regions": [dict(base, text="HHg", valign=mode)]}])
+            code, r = run("apply", str(self.spec_path), "--src", str(self.src),
+                          "--out", str(Path(self._tmp.name) / outdir))
+            self.assertEqual(code, 0, r)
+        top = lambda d, n: self._top_ink_row(Path(self._tmp.name) / d / n)  # noqa: E731
+        self.assertEqual(top("m", "blank_a.png"), top("m", "blank_b.png"))
+        self.assertNotEqual(top("c", "blank_a.png"), top("c", "blank_b.png"))  # ink-centring drifts
+
+    def test_shadow_can_be_a_list(self):
+        self._blank("blank_a.png")
+        self.write_spec([{"source": "blank_a.png", "regions": [
+            {"box": [0, 0, 100, 40], "text": "Hi", "size": 16, "erase": {"mode": "none"},
+             "shadow": [{"color": "#1e2d55dc", "offset": [1, 1]}, {"color": "#1e2d558c", "offset": [1, 2]}]}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+
+    def test_measure_reports_widths_and_fit(self):
+        code, r = run("measure", "Hi", "A much longer label", "--font", FONT, "--size", "14", "--max-width", "40")
+        self.assertEqual(code, 0)
+        res = {x["text"]: x for x in r["results"]}
+        self.assertTrue(res["Hi"]["fits"])
+        self.assertFalse(res["A much longer label"]["fits"])
 
 
 if __name__ == "__main__":

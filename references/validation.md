@@ -5,6 +5,10 @@ dimensions, mode and format equal; **zero pixel difference outside the declared 
 (`outside_diff_pixels`, `alpha_changed_outside`); and it writes an original-vs-translated sheet over a
 checkerboard to `.imgtr-work/compare_<name>.png`. Exit code 2 means a check failed.
 
+**Leftover ink check.** `verify` cannot know that an old line was missed by the erase block. Run
+`analyze OUT.png --box <text column> --ref-box <clean patch> --lines` on the output: the number of lines
+must equal the number of regions you drew. An extra line is residue of the old text; widen the erase block.
+
 It cannot judge the visual items (ghosted glyphs, spelling, legibility, style, seams in the
 erased area). View every compare sheet yourself. A passing `verify` is necessary, not sufficient.
 Do not claim pixel-perfect preservation beyond what `verify` reported.
