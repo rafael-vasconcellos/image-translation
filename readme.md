@@ -58,8 +58,10 @@ installed (on Windows, `C:\Windows\Fonts`).
 ## Using it with an agent
 
 1. Install Pillow and numpy (above).
-2. Copy the `image-translation/` folder to your agent's skills directory (see your agent's documentation
-   for the location and for how it resolves script paths).
+2. Copy the `image-translation/` folder to your agent's skills directory.
+```bash
+npx skills add rafael-vasconcellos/image-translation
+```
 3. Open the agent in the folder that contains the images and ask, for example:
    *"Translate the images in this folder to English."*
 
