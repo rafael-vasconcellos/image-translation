@@ -12,6 +12,17 @@ spends its steps on translation and review instead of debugging code.
 > **Status: v0.2.** Developed and tested on synthetic fixtures and on 13 real UI images from a Japanese
 > visual novel. See [Status and limits](#status-and-limits).
 
+## Summary
+
+- [Why a CLI instead of a better prompt](#why-a-cli-instead-of-a-better-prompt)
+- [Repository layout](#repository-layout)
+- [Requirements](#requirements)
+- [Using it with an agent](#using-it-with-an-agent)
+- [Using the CLI directly](#using-the-cli-directly)
+- [Guarantees and refusals](#guarantees-and-refusals)
+- [Status and limits](#status-and-limits)
+- [Development](#development)
+
 ## Why a CLI instead of a better prompt
 
 Early tests with agents showed the same pattern: one run spent dozens of steps analysing background statistics and delivered no file; another worked, but embedded a 6 KB `python -c` script with every coordinate, colour and translation inside a command line, and verified almost nothing. Both problems come from the agent improvising pixel code. A tested tool with a declarative spec fixes that:
