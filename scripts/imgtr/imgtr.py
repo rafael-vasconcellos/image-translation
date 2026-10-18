@@ -37,7 +37,7 @@ WRITE_FORMATS = {"PNG", "BMP", "JPEG", "WEBP", "TIFF"}
 DEFAULT_EXCLUDES = {"translated", ".imgtr-work", ".git", "node_modules", "__pycache__", ".venv"}
 WORKDIR = ".imgtr-work"
 STYLE_KEYS = ("font", "font_index", "size", "min_size", "fit", "fill", "outline", "shadow",
-              "align", "valign", "spacing", "antialias", "opacity", "dx", "dy")
+              "align", "valign", "baseline", "spacing", "antialias", "opacity", "dx", "dy")
 ERASE_MODES = ("none", "fill", "copy", "sample", "column-repeat", "consensus")
 
 
@@ -644,8 +644,11 @@ def layout_text(text, st, bw, bh, where):
     soffs = [tuple(x.get("offset", [1, 1])) for x in shadows_of(st)]
     spacing = int(st.get("spacing", 4))
     align, valign = st.get("align", "center"), st.get("valign", "middle")
-    if align not in ("left", "center", "right") or valign not in ("top", "middle", "bottom", "metrics", "origin"):
-        raise CliError(f"{where}: align must be left|center|right and valign top|middle|bottom|metrics|origin")
+    if align not in ("left", "center", "right") or valign not in ("top", "middle", "bottom", "metrics", "origin", "baseline"):
+        raise CliError(f"{where}: align must be left|center|right and "
+                       f"valign top|middle|bottom|metrics|origin|baseline")
+    if valign == "baseline" and "baseline" not in st:
+        raise CliError(f"{where}: valign 'baseline' needs a 'baseline' value (row, counted from the box top)")
     requested = int(st["size"])
     min_size = int(st.get("min_size", max(6, requested - 4)))
     sizes = range(requested, min_size - 1, -1) if st.get("fit", "shrink") == "shrink" else [requested]
@@ -660,9 +663,13 @@ def layout_text(text, st, bw, bh, where):
                                               align=align, stroke_width=sw)
         tw, th = r - l, b - t
         ix = {"left": 0, "center": (bw - tw) // 2, "right": bw - tw}[align] + dx
-        if valign in ("metrics", "origin") and "\n" not in text:
+        asc, desc = font.getmetrics()
+        single = "\n" not in text
+        if valign == "baseline" and single:
+            # the baseline sits on a fixed row whatever the font or size: the exact way to align texts
+            iy = int(st["baseline"]) - asc + t + dy
+        elif valign in ("metrics", "origin") and single:
             # line-box placement: the baseline lands on the same row for any text of this font size
-            asc, desc = font.getmetrics()
             oy = (bh - (asc + desc)) // 2 if valign == "metrics" else 0
             iy = oy + t + dy
         else:
@@ -672,7 +679,7 @@ def layout_text(text, st, bw, bh, where):
         fits = all(b_[0] >= 0 and b_[1] >= 0 and b_[2] <= bw and b_[3] <= bh for b_ in [ink] + sinks)
         last = {"font": font, "size": s, "origin": (l, t), "ink": ink, "sw": sw, "spacing": spacing,
                 "align": align, "antialias": antialias, "fits": fits, "need": [tw, th],
-                "requested": requested}
+                "requested": requested, "baseline_rel": (iy - t + asc) if single else None}
         if fits:
             return last
     return last
@@ -893,6 +900,13 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
                      "requested_size": lay["requested"], "size_used": lay["size"]}
             if region.get("erase") is not None:
                 entry["erase_mode"] = region["erase"]["mode"]
+            if lay["baseline_rel"] is not None:
+                ix0, ix1 = dbox[0] + lay["ink"][0], dbox[0] + lay["ink"][2]
+                entry["align"] = lay["align"]
+                entry["baseline"] = dbox[1] + lay["baseline_rel"]
+                entry["anchor"] = {"left": ix0, "right": ix1}.get(lay["align"], (ix0 + ix1) / 2)
+            if "align_key" in region:
+                entry["align_key"] = region["align_key"]
             if lay["size"] != lay["requested"]:
                 warns.append(f"shrunk from {lay['requested']} to {lay['size']}")
             if not lay["fits"]:
@@ -914,7 +928,7 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
     stray = int((np.any(arr != orig, axis=-1) & ~allowed).sum())
     if stray:
         raise CliError(f"{name}: internal error, {stray} pixels changed outside the declared boxes")
-    result = {"source": name, "regions": report}
+    result = {"source": name, "size": [w, h], "regions": report}
     if erase_report:
         result["erase"] = erase_report
     if overflow and not allow_overflow:
@@ -952,6 +966,53 @@ def allowed_mask(img_spec, size):
     return mask
 
 
+def alignment_findings(results):
+    """Rule: same image height -> same baseline row; same image width -> same horizontal anchor.
+    Compares single-line regions that sit at the same position (same region index and cell, or the
+    same `align_key`); a region opts out with "align_key": null."""
+    imgs = [r for r in results if r.get("size") and r.get("regions") and r.get("status") != "error"]
+    findings, groups = [], {"height": {}, "width": {}}
+    for rule, dim, idx in (("same-height", "height", 1), ("same-width", "width", 0)):
+        by_size = {}
+        for r in imgs:
+            by_size.setdefault(r["size"][idx], []).append(r)
+        for size, members in sorted(by_size.items()):
+            if len(members) < 2:
+                continue
+            groups[dim][str(size)] = [m["source"] for m in members]
+            keyed = {}
+            for r in members:
+                for e in r["regions"]:
+                    if "baseline" not in e or ("align_key" in e and e["align_key"] is None):
+                        continue
+                    key = e.get("align_key") or (f"{e['region']}:{e['cell']}" if e.get("cell") is not None
+                                                 else str(e["region"]))
+                    keyed.setdefault(key, []).append((r["source"], e))
+            for key, items in keyed.items():
+                if len(items) < 2:
+                    continue
+                if dim == "height":
+                    vals = {n: e["baseline"] for n, e in items}
+                    if max(vals.values()) != min(vals.values()):
+                        findings.append({"rule": rule, dim: size, "key": key, "issue": "baseline differs",
+                                         "baseline": vals})
+                    sizes = {n: e["size_used"] for n, e in items}
+                    if len(set(sizes.values())) > 1:
+                        findings.append({"rule": rule, dim: size, "key": key, "issue": "font size differs",
+                                         "size": sizes})
+                else:
+                    modes = {n: e["align"] for n, e in items}
+                    vals = {n: e["anchor"] for n, e in items}
+                    tol = 1 if set(modes.values()) == {"center"} else 0
+                    if len(set(modes.values())) > 1:
+                        findings.append({"rule": rule, dim: size, "key": key, "issue": "align modes differ",
+                                         "align": modes})
+                    elif max(vals.values()) - min(vals.values()) > tol:
+                        findings.append({"rule": rule, dim: size, "key": key, "issue": "anchor differs",
+                                         "align": next(iter(modes.values())), "anchor": vals})
+    return findings, {k: v for k, v in groups.items() if v}
+
+
 def cmd_apply(args):
     spec = load_spec(args.spec)
     src_dir, out_dir = Path(args.src), Path(args.out)
@@ -973,8 +1034,12 @@ def cmd_apply(args):
         results.append(res)
     if only and not results:
         raise CliError("--only matched no image in the spec")
-    emit({"ok": ok, "out": str(out_dir), "images": results}, args.pretty)
-    return 0 if ok else 2
+    findings, groups = alignment_findings(results)
+    emit({"ok": ok, "out": str(out_dir), "images": results,
+          "alignment": {"ok": not findings, "groups": groups, "findings": findings}}, args.pretty)
+    if not ok or (args.strict_alignment and findings):
+        return 2
+    return 0
 
 
 # --------------------------------------------------------------------------- verify
@@ -1073,6 +1138,8 @@ def cmd_measure(args):
     font = get_font(args.font, args.size, args.font_index)
     probe = ImageDraw.Draw(Image.new("L", (1, 1)))
     asc, desc = font.getmetrics()
+    cap = probe.textbbox((0, 0), "H", font=font)
+    xh = probe.textbbox((0, 0), "x", font=font)
     rows = []
     for text in args.text:
         l, t, r, b = probe.multiline_textbbox((0, 0), text, font=font, spacing=args.spacing,
@@ -1082,7 +1149,8 @@ def cmd_measure(args):
             row["fits"] = (r - l) <= args.max_width
         rows.append(row)
     emit({"ok": True, "font": args.font, "size": args.size, "stroke": args.stroke,
-          "ascent": asc, "descent": desc, "results": rows}, args.pretty)
+          "ascent": asc, "descent": desc,
+          "cap_height": cap[3] - cap[1], "x_height": xh[3] - xh[1], "results": rows}, args.pretty)
     return 0
 
 
@@ -1162,6 +1230,8 @@ def build_parser():
     s.add_argument("--only", action="append", help="process only this source (repeatable)")
     s.add_argument("--allow-overflow", action="store_true", help="write images even if a text overflows")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--strict-alignment", action="store_true",
+                   help="exit 2 if the alignment check (same height / same width) has findings")
     s.set_defaults(func=cmd_apply)
 
     s = sub.add_parser("verify", help="check output against source: size/mode/format, pixels outside edits")

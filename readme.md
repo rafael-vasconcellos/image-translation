@@ -87,7 +87,7 @@ The skill makes the agent work in this order:
 2. Look at every image (`crop` enlarges small text), transcribe and translate.
 3. Draft `translations.json` spec with the transcriptions and translations (the agent writes this file itself).
 4. `analyze` the originals: text lines, ink colours, outline and shadow, clean background.
-5. `fonts` and `measure`: pick a font and check the translations fit.
+5. `fonts` and `measure`: pick a font and check the translations fit before drawing; one font size and one baseline per group of same-height images.
   - The agent then completes the spec by hand (boxes, erase modes, font and sizes) from these read-only outputs.
 6. `apply` one representative image, `verify --compare`, look at the sheet, then do the rest.
 7. Check for leftover ink, write the report, `clean`.
@@ -135,7 +135,8 @@ every line), plus a family of 3-state buttons as a preset:
     "tab": {
       "cells": { "width": 80, "count": 3 },
       "erase": [ { "cell": "all", "mode": "column-repeat", "ref_col": 10, "box": [7, 0, 66, 24] } ],
-      "style": { "size": 13, "fill": "#3f3f7f", "shadow": { "color": "#ffffffc8", "offset": [1, 1] } },
+      "style": { "size": 13, "fill": "#3f3f7f", "shadow": { "color": "#ffffffc8", "offset": [1, 1] },
+                 "valign": "baseline", "baseline": 15 },
       "regions": [ { "cell": "all", "box": [7, 2, 66, 20], "text": "{text}",
                      "state_overrides": { "2": { "fill": "#9f9fbf" } } } ]
     }
@@ -144,8 +145,8 @@ every line), plus a family of 3-state buttons as a preset:
     { "source": "back_sound.png",
       "erase": [ { "mode": "copy", "box": [75, 88, 255, 277], "offset": [325, 0] } ],
       "regions": [
-        { "box": [88, 94, 250, 24], "text": "Master Volume", "align": "left", "valign": "origin",
-          "fill": "#dae4ff" } ] },
+        { "box": [88, 90, 312, 24], "text": "Master Volume", "align": "left", "valign": "baseline",
+          "baseline": 18, "fill": "#dae4ff" } ] },
     { "source": "btn_tab_sound_bt3.png", "preset": "tab", "text": "Sound" }
   ]
 }
@@ -189,6 +190,9 @@ can see. That is also why `verify` is paired with the leftover-ink check describ
 - Pixels outside the declared boxes are left untouched, and `apply` checks this itself before writing.
 - Text is composited with straight-alpha "over": translucent areas stay translucent, and only covered
   pixels change.
+- **Alignment is checked**: images of the same height must share a baseline row and images of the same width a
+  horizontal anchor; `apply` reports every deviation (`alignment.findings`), and `--strict-alignment` turns
+  them into a failing exit code. A region can opt out with `"align_key": null`.
 - If a translation does not fit its box at `min_size`, the image is **not written** and the overflow is
   reported. Every shrink is reported too.
 - The CLI refuses: 16-bit PNG, animated images, GIF output, and `tRNS` transparency on non-RGBA images.

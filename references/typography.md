@@ -9,6 +9,31 @@ Limits of v0: solid fills only (no gradient text), no letter-spacing, one font p
 
 ---
 
+## Alignment across images (rule)
+
+- **Same height means same vertical alignment.** In a group of images with the same height, the
+  single-line texts at corresponding positions (same region index and cell, or the same `align_key`) sit
+  on the **same baseline row**.
+- **Same width means same horizontal alignment.** In a group of images with the same width,
+  corresponding texts use the same `align` and the same anchor: the same left edge, centre or right edge.
+- **How.** Use `valign: baseline` with one `baseline` value per group, not `middle`/`top`/`bottom`: those
+  follow each label's own glyphs and drift with descenders ("System" sat 2 px higher than "Sound").
+  Use the same box and `align`, and **one font size per group**: the smallest at which every label of the
+  group fits (`measure --max-width`). A label that shrinks alone shifts the baseline, so shrink the group
+  or reword the label.
+- **Where the baseline comes from.** CJK text has no baseline. Centre the Latin capitals on the ink
+  centre of the original text: baseline row = original centre + (`cap_height` + 1) / 2, with `cap_height`
+  from `measure`. Take original centres from `analyze --lines` (panels) or from the ink rows (buttons).
+- **Lists of lines.** Take the pitch from the originals: fit one grid across all the images of the group
+  rather than using each line's own ink top, which jitters by about 2 px with the glyph shapes.
+- **Check.** `apply` (also with `--dry-run`) reports `alignment.findings`. Fix every finding, or opt a
+  region out with `"align_key": null` and say why in the report.
+- **Exception.** If the originals of a group are not aligned beyond glyph noise (about 3 px), do not
+  invent alignment: keep each original position, opt those regions out, and report it. The same
+  dimensions do not by themselves prove the same layout.
+
+---
+
 ## Original guidance
 
 ## Recreate the typography and layout

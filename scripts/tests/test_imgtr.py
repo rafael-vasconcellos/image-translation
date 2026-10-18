@@ -386,6 +386,84 @@ class ImgtrTests(unittest.TestCase):
         self.assertTrue(res["Hi"]["fits"])
         self.assertFalse(res["A much longer label"]["fits"])
 
+    # ---- alignment rule: same height -> same baseline, same width -> same horizontal anchor
+    def _two_blanks(self):
+        for n in ("blank_a.png", "blank_b.png"):
+            self._blank(n)
+
+    def _align_spec(self, a, b):
+        base = {"box": [0, 0, 100, 40], "size": 20, "erase": {"mode": "none"}}
+        self.write_spec([{"source": "blank_a.png", "regions": [dict(base, **a)]},
+                         {"source": "blank_b.png", "regions": [dict(base, **b)]}])
+        return run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out), "--dry-run")
+
+    def test_alignment_flags_baseline_drift_between_same_height_images(self):
+        self._two_blanks()
+        code, r = self._align_spec({"text": "HHH", "align": "left"}, {"text": "HHg", "align": "left"})
+        fs = r["alignment"]["findings"]
+        self.assertEqual(code, 0)  # warnings, not failures, unless --strict-alignment
+        self.assertTrue(any(f["rule"] == "same-height" and f["issue"] == "baseline differs" for f in fs), fs)
+        self.assertIn("40", r["alignment"]["groups"]["height"])
+
+    def test_fixed_baseline_aligns_texts_whatever_the_glyphs(self):
+        self._two_blanks()
+        code, r = self._align_spec({"text": "HHH", "align": "left", "valign": "baseline", "baseline": 28},
+                                   {"text": "HHg", "align": "left", "valign": "baseline", "baseline": 28})
+        self.assertEqual(r["alignment"]["findings"], [])
+        self.assertEqual({e["baseline"] for i in r["images"] for e in i["regions"]}, {28})
+
+    def test_baseline_mode_really_puts_the_baseline_on_that_row(self):
+        self._two_blanks()
+        self.write_spec([{"source": "blank_a.png", "regions": [
+            {"box": [0, 0, 100, 40], "text": "HHH", "size": 20, "align": "left", "valign": "baseline",
+             "baseline": 28, "erase": {"mode": "none"}}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        a = np.array(Image.open(self.out / "blank_a.png"))
+        rows = np.where((a[..., 0] > 200).any(axis=1))[0]
+        self.assertEqual(int(rows.max()), 27)  # the last ink row of flat-bottomed capitals sits on row baseline-1
+
+    def test_baseline_valign_requires_a_baseline_value(self):
+        self._blank("blank_a.png")
+        self.write_spec([{"source": "blank_a.png", "regions": [
+            {"box": [0, 0, 100, 40], "text": "H", "size": 20, "valign": "baseline", "erase": {"mode": "none"}}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("baseline", r["images"][0]["error"])
+
+    def test_alignment_flags_different_horizontal_anchor_for_same_width_images(self):
+        self._two_blanks()
+        code, r = self._align_spec({"text": "Hi", "align": "left"}, {"text": "Hi", "align": "center"})
+        self.assertTrue(any(f["rule"] == "same-width" and f["issue"] == "align modes differ"
+                            for f in r["alignment"]["findings"]))
+        code, r = self._align_spec({"text": "Hi", "align": "left"}, {"text": "Hi", "align": "left", "dx": 5})
+        self.assertTrue(any(f["issue"] == "anchor differs" for f in r["alignment"]["findings"]))
+
+    def test_align_key_null_opts_a_region_out(self):
+        self._two_blanks()
+        code, r = self._align_spec({"text": "Hi", "align": "left"},
+                                   {"text": "Hi", "align": "left", "dx": 9, "align_key": None})
+        self.assertEqual(r["alignment"]["findings"], [])
+
+    def test_alignment_flags_a_label_that_shrank_alone(self):
+        self._two_blanks()
+        code, r = self._align_spec({"text": "Hi", "align": "left", "valign": "baseline", "baseline": 28},
+                                   {"text": "A fairly long label here", "align": "left", "valign": "baseline",
+                                    "baseline": 28, "min_size": 10})
+        self.assertTrue(any(f["issue"] == "font size differs" for f in r["alignment"]["findings"]), r["alignment"])
+
+    def test_strict_alignment_changes_the_exit_code(self):
+        self._two_blanks()
+        self._align_spec({"text": "HHH", "align": "left"}, {"text": "HHg", "align": "left"})
+        code, _ = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out),
+                      "--dry-run", "--strict-alignment")
+        self.assertEqual(code, 2)
+
+    def test_measure_reports_cap_height(self):
+        code, r = run("measure", "Hi", "--font", FONT, "--size", "20")
+        self.assertGreater(r["cap_height"], 10)
+        self.assertGreater(r["cap_height"], r["x_height"])
+
 
 if __name__ == "__main__":
     unittest.main()

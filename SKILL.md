@@ -51,6 +51,10 @@ and tell the user; that is the only installation this skill allows.
 - **Report:** `translated_report.md` in the working directory, beside `translated/`, never inside it.
 - **Consistency:** keep a small glossary for repeated terms, names, buttons and labels. Prefer a
   user-supplied glossary.
+- **Alignment:** images of the same height share one baseline row; images of the same width share one
+  horizontal anchor. How to get there and the exception are in `references/typography.md`. `apply` checks
+  it and reports `alignment.findings`: resolve every one, or opt out with `align_key: null` and say why in
+  the report.
 - **Autonomy:** process the whole batch without routine confirmation. Ask only for a genuinely
   blocking ambiguity or a required authorization. If one region is unsafe to edit, preserve it and go on.
 
@@ -82,8 +86,10 @@ and tell the user; that is the only installation this skill allows.
 5. **Pick a font and check fit.** `fonts --filter ... --sample "Your text"` and view the sheet. Choose the
    closest match in character and weight; record a fallback in the report if it affects fidelity. Then
    `measure` your candidate translations against the available width, and reword now rather than after
-   `apply` reports an overflow. For lists of lines use `valign: metrics` so baselines do not drift.
-6. **One representative first.** Run `apply --only <one image> ...`, then `verify --spec --compare --only
+   `apply` reports an overflow. Pick ONE size and `valign: baseline` per same-height group, so baselines line up across images
+   (`measure` gives `cap_height` for placing the baseline).
+6. **One representative first.** Run `apply --dry-run` on the whole spec first: it reports overflows and
+   alignment findings without writing. Then `apply --only <one image> ...`, then `verify --spec --compare --only
    <it>`, and view the sheet. Complete one representative per distinct background/layout, including the
    hard cases (longest translation, smallest text, 3-state strips, translucent panels). Fix the method
    before applying it to the rest of the family. After `apply`, run the leftover-ink check from

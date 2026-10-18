@@ -47,6 +47,7 @@ erased first, then all the lines are drawn. A per-region erase would wipe the li
 | `erase` | optional erase entry for this region only |
 | style keys | any style key below, overriding `defaults`, the preset and the image `style` |
 | `state_overrides` | `{ "2": { "fill": "#9f9fbf" } }`: style per cell index (pressed = lighter/shifted) |
+| `align_key` | name that pairs this region with regions of other images in the alignment check (default: region index and cell). `null` opts the region out |
 
 ## Erase entries
 
@@ -77,7 +78,8 @@ same dimensions instead of the image itself. Use it when the image has no clean 
 | `outline` | none | `{ "color": "#000000", "width": 1 }` |
 | `shadow` | none | one `{ "color": "#1e2d55dc", "offset": [1, 1] }` or a **list** of them (drawn in order). Must stay inside `box` |
 | `align` | `center` | `left\|center\|right`: the ink (outline included) is aligned horizontally |
-| `valign` | `middle` | `top\|middle\|bottom` align the ink box. **`metrics`** centres the font's line box (ascent+descent) and **`origin`** puts its top at the box top: the baseline then lands on the same row for any text of that font size. Use them for lists of lines, otherwise "Voice" and "Display" drift by the descender |
+| `valign` | `middle` | `top\|middle\|bottom` align the ink box. **`baseline`** puts the baseline on row `baseline` (counted from the box top) whatever the font or size: use it to align texts across images. **`metrics`** centres the font's line box (ascent+descent) and **`origin`** puts its top at the box top: the baseline is then stable for one font size. `top`/`middle`/`bottom` follow each label's glyphs, so the baseline drifts with descenders |
+| `baseline` | | row of the baseline from the box top; required by `valign: baseline` |
 | `spacing` | 4 | line spacing for multi-line text |
 | `dx`, `dy` | 0 | nudge after alignment (e.g. pressed state) |
 | `opacity` | 1.0 | multiplies the colour alpha |
@@ -85,6 +87,24 @@ same dimensions instead of the image itself. Use it when the image has no clean 
 
 Text is composited with straight-alpha "over", so semi-transparent areas stay semi-transparent
 and only the pixels the text covers change. Output is deterministic (same spec + inputs = same bytes).
+
+## Alignment check
+
+Rule: images of the same **height** share one baseline row; images of the same **width** share one
+horizontal anchor. `apply` (also with `--dry-run`) compares single-line regions that sit at the same
+position in images of equal height or width and returns:
+
+```json
+"alignment": { "ok": false,
+  "groups": { "height": { "24": ["btn_a.png", "btn_b.png"] }, "width": { "240": ["btn_a.png", "btn_c.png"] } },
+  "findings": [ { "rule": "same-height", "height": 24, "key": "0:1", "issue": "baseline differs",
+                  "baseline": { "btn_a.png": 17, "btn_b.png": 15 } } ] }
+```
+
+Issues: `baseline differs`, `font size differs` (a label shrank alone), `align modes differ`, `anchor differs`
+(centres may differ by 1 px, from rounding). Findings are warnings; `--strict-alignment` makes them exit 2.
+Resolve each one or opt the region out with `"align_key": null`. The rationale and exceptions are in
+`typography.md`.
 
 ## Examples
 
@@ -100,7 +120,8 @@ double drop shadow):
   "regions": [
     { "box": [25, 24, 190, 40], "text": "SETTINGS", "size": 28, "align": "left",
       "outline": { "color": "#000000", "width": 3 } },
-    { "box": [88, 94, 250, 24], "text": "Master Volume", "size": 15, "align": "left", "valign": "metrics",
+    { "box": [88, 90, 312, 24], "text": "Master Volume", "size": 15, "align": "left",
+      "valign": "baseline", "baseline": 18,
       "fill": "#dae4ff",
       "shadow": [ { "color": "#1e2d55dc", "offset": [1, 1] }, { "color": "#1e2d558c", "offset": [1, 2] } ] } ] }
 ```
@@ -111,7 +132,8 @@ Three-state button family as a preset (dark label, light drop shadow, lighter la
 { "presets": { "tab": {
     "cells": { "width": 80, "count": 3 },
     "erase": [ { "cell": "all", "mode": "column-repeat", "ref_col": 10, "box": [7, 0, 66, 24] } ],
-    "style": { "size": 13, "fill": "#3f3f7f", "shadow": { "color": "#ffffffc8", "offset": [1, 1] } },
+    "style": { "size": 13, "fill": "#3f3f7f", "shadow": { "color": "#ffffffc8", "offset": [1, 1] },
+               "valign": "baseline", "baseline": 15 },
     "regions": [ { "cell": "all", "box": [7, 2, 66, 20], "text": "{text}",
                    "state_overrides": { "2": { "fill": "#9f9fbf",
                                                "shadow": { "color": "#ffffffb4", "offset": [1, 1] } } } } ] } },
