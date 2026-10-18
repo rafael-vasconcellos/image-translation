@@ -159,6 +159,35 @@ class ImgtrTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("same dimensions", r["images"][0]["error"])
 
+    def test_sources_gives_each_cell_its_own_single_cell_donor(self):
+        strip = Image.open(self.src / "btn_tab.png").convert("RGBA")  # 240x24 = 3 cells of 80
+        donors = []
+        for k in range(3):
+            name = f"donor_{k}.png"
+            strip.crop((k * 80, 0, (k + 1) * 80, 24)).save(self.src / name)
+            donors.append(name)
+        make_strip(self.src / "btn_dest.png", "ZZZ", 80)
+        self.write_spec([{"source": "btn_dest.png", "cells": {"width": 80, "count": 3},
+                          "erase": [{"cell": "all", "mode": "column-repeat", "ref_col": 10, "box": [7, 0, 66, 24],
+                                     "sources": donors}],
+                          "regions": [{"cell": "all", "box": [7, 2, 66, 20], "text": "ok", "size": 12}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        out = np.array(Image.open(self.out / "btn_dest.png"))
+        for k in range(3):  # a column far from the drawn label equals the donor's reference column
+            d = np.array(Image.open(self.src / donors[k]))
+            self.assertTrue(np.array_equal(out[:, k * 80 + 70], d[:, 10]))
+
+    def test_sources_must_be_cell_sized(self):
+        make_strip(self.src / "btn_dest.png", "ZZZ", 80)
+        self.write_spec([{"source": "btn_dest.png", "cells": {"width": 80, "count": 3},
+                          "erase": [{"cell": "all", "mode": "column-repeat", "ref_col": 10, "box": [7, 0, 66, 24],
+                                     "sources": ["btn_tab.png"] * 3}],
+                          "regions": [{"cell": "all", "box": [7, 2, 66, 20], "text": "ok", "size": 12}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("exactly one cell", r["images"][0]["error"])
+
     # ---- analyze
     def test_analyze_variants_separates_unique_text_from_shared_header(self):
         code, r = run("analyze", *(str(self.src / n) for n in ("back_a.png", "back_b.png", "back_c.png")))

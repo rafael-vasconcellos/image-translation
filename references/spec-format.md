@@ -65,6 +65,10 @@ erased first, then all the lines are drawn. A per-region erase would wipe the li
 `source` (optional, for `copy`, `column-repeat` and `sample`): take the pixels from another image of the
 same dimensions instead of the image itself. Use it when the image has no clean pixels of its own.
 
+`sources` (optional, same modes, for images with `cells`): one single-cell donor image per cell, in cell order,
+each exactly one cell in size. Use it when the donors are separate files (a strip of 3 states whose siblings
+are three 51x24 images). Boxes stay cell-relative, so `box` and `ref_col` index into the donor.
+
 ## Style keys
 
 | key | default | notes |
@@ -152,6 +156,14 @@ state from the donor because the boxes are translated per cell:
     { "cell": "all", "mode": "column-repeat", "ref_col": 8,     "box": [15, 0, 22, 24], "source": "btn_end_bt3.png" },
     { "cell": "all", "mode": "copy",          "offset": [0, 0], "box": [37, 0, 10, 24], "source": "btn_end_bt3.png" } ],
   "regions": [ { "cell": "all", "box": [7, 2, 37, 20], "text": "Reset", "size": 13 } ] }
+```
+
+A strip whose siblings are separate single-cell files uses `sources` instead (match each cell to the donor
+whose untouched cap columns are identical):
+
+```json
+"erase": [ { "cell": "all", "mode": "column-repeat", "ref_col": 8, "box": [15, 0, 22, 24],
+             "sources": ["btn_back_off.png", "btn_back_over.png", "btn_back_on.png"] } ]
 ```
 
 Check that the donor really shares the pixels outside the text: `analyze a.png b.png` shows in `ink_bbox`

@@ -728,7 +728,8 @@ def render_layer(bw, bh, text, st, lay, where):
     return Image.alpha_composite(layer, ink(fill_mask, st.get("fill", "#ffffff")))
 
 
-def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_cache, src_dir, warns):
+def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_cache, src_dir, warns,
+                     cell=0, cell_w=None):
     mode = erase["mode"]
     x, y, w, h = ebox
     if mode == "none":
@@ -746,25 +747,40 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
         donor = consensus_cache[key]
         if donor.shape != orig.shape:
             raise CliError(f"{where}.erase.source must have the same dimensions as the image")
+    dox = 0  # x offset of the donor inside the destination (non-zero for per-cell donors)
+    if erase.get("sources"):
+        if erase.get("source") or mode == "consensus":
+            raise CliError(f"{where}.erase: 'sources' cannot be combined with 'source' or mode 'consensus'")
+        srcs = erase["sources"]
+        if not isinstance(srcs, list) or cell >= len(srcs):
+            raise CliError(f"{where}.erase.sources needs one donor image per cell (missing cell {cell})")
+        key = ("source", str(srcs[cell]))
+        if key not in consensus_cache:
+            consensus_cache[key] = to_rgba(open_image(Path(src_dir) / srcs[cell]))
+        donor = consensus_cache[key]
+        if donor.shape[0] != orig.shape[0] or donor.shape[1] != (cell_w or orig.shape[1]):
+            raise CliError(f"{where}.erase.sources[{cell}] must be exactly one cell "
+                           f"({cell_w or orig.shape[1]}x{orig.shape[0]})")
+        dox = ox
     if mode == "copy":
         off = erase.get("offset")
         if (not isinstance(off, (list, tuple)) or len(off) != 2
                 or not all(isinstance(v, int) and not isinstance(v, bool) for v in off)):
             raise CliError(f"{where}.erase.offset must be [dx, dy] integers for mode 'copy'")
         sx, sy = x + off[0], y + off[1]
-        if sx < 0 or sy < 0 or sx + w > orig.shape[1] or sy + h > orig.shape[0]:
+        if sx - dox < 0 or sy < 0 or sx - dox + w > donor.shape[1] or sy + h > donor.shape[0]:
             raise CliError(f"{where}.erase: the copy source [{sx},{sy},{w},{h}] falls outside the image")
         if donor is orig and sx < x + w and x < sx + w and sy < y + h and y < sy + h:
             raise CliError(f"{where}.erase: the copy source overlaps the area being erased")
-        arr[y:y + h, x:x + w] = donor[sy:sy + h, sx:sx + w]
+        arr[y:y + h, x:x + w] = donor[sy:sy + h, sx - dox:sx - dox + w]
         return
     if mode == "column-repeat":
         if "ref_col" not in erase:
             raise CliError(f"{where}.erase.ref_col is required for column-repeat")
         ref = int(erase["ref_col"]) + ox
-        if not 0 <= ref < orig.shape[1]:
+        if not 0 <= ref < orig.shape[1] or not 0 <= ref - dox < donor.shape[1]:
             raise CliError(f"{where}.erase.ref_col out of range")
-        arr[:, x:x + w] = donor[:, ref:ref + 1]
+        arr[:, x:x + w] = donor[:, ref - dox:ref - dox + 1]
         return
 
     def sample_patch():
@@ -773,11 +789,11 @@ def erase_box_pixels(arr, orig, erase, ebox, ox, seed_parts, where, consensus_ca
             raise CliError(f"{where}.erase.ref_box is required for mode '{mode}'")
         check_box(rb, f"{where}.erase.ref_box")
         rx, ry, rw, rh = [rb[0] + ox, rb[1], rb[2], rb[3]]
-        if rx < 0 or ry < 0 or rx + rw > orig.shape[1] or ry + rh > orig.shape[0]:
+        if rx - dox < 0 or ry < 0 or rx - dox + rw > donor.shape[1] or ry + rh > donor.shape[0]:
             raise CliError(f"{where}.erase.ref_box falls outside the image")
         if donor is orig and rx < x + w and x < rx + rw and ry < y + h and y < ry + rh:
             raise CliError(f"{where}.erase.ref_box overlaps the area being erased")
-        patch = donor[ry:ry + rh, rx:rx + rw].reshape(-1, 4)
+        patch = donor[ry:ry + rh, rx - dox:rx - dox + rw].reshape(-1, 4)
         spread = float(patch[:, :3].astype(float).std(axis=0).max())
         limit = float(erase.get("max_std", 12))
         if spread > limit:
@@ -880,7 +896,8 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
     for ei, (entry, cell, ebox, ox) in enumerate(image_erases(img_spec, (w, h), where)):
         ew = []
         erase_box_pixels(arr, orig, entry, ebox, ox, [str(seed), name, "image", str(ei), str(cell)],
-                         f"{where}.erase[{ei}]", consensus_cache, src_dir, ew)
+                         f"{where}.erase[{ei}]", consensus_cache, src_dir, ew, cell=cell,
+                         cell_w=(img_spec.get("cells") or {}).get("width"))
         erase_report.append({"mode": entry["mode"], "cell": cell if img_spec.get("cells") else None,
                              "box": ebox, **({"warnings": ew} if ew else {})})
     for ri, region in enumerate(regions):
@@ -894,7 +911,7 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
             if ebox is not None:
                 erase_box_pixels(arr, orig, region["erase"], ebox, ox,
                                  [str(seed), name, str(ri), str(cell)], rwhere, consensus_cache,
-                                 src_dir, warns)
+                                 src_dir, warns, cell=cell, cell_w=(img_spec.get("cells") or {}).get("width"))
             lay = layout_text(text, st, dbox[2], dbox[3], rwhere)
             entry = {"region": ri, "cell": cell if img_spec.get("cells") else None, "text": text,
                      "requested_size": lay["requested"], "size_used": lay["size"]}
