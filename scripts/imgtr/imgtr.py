@@ -905,6 +905,9 @@ def process_image(spec, img_spec, idx, src_dir, out_dir, allow_overflow, dry_run
         text = region.get("text")
         if not isinstance(text, str) or not text:
             raise CliError(f"{rwhere}.text is required")
+        align_key = region.get("align_key")
+        if align_key is not None and (not isinstance(align_key, str) or not align_key.strip()):
+            raise CliError(f"{rwhere}.align_key must be a non-empty string or null")
         for cell, dbox, ebox, ox in region_geometry(img_spec, region, (w, h), rwhere):
             st = style_for(spec, img_spec, region, cell)
             warns = []
@@ -1002,30 +1005,36 @@ def alignment_findings(results):
                 for e in r["regions"]:
                     if "baseline" not in e or ("align_key" in e and e["align_key"] is None):
                         continue
-                    key = e.get("align_key") or (f"{e['region']}:{e['cell']}" if e.get("cell") is not None
-                                                 else str(e["region"]))
-                    keyed.setdefault(key, []).append((r["source"], e))
-            for key, items in keyed.items():
+                    cell = e.get("cell")
+                    align_key = e.get("align_key")
+                    if align_key:
+                        key = ("align_key", align_key, cell)
+                        display_key = f"{align_key}:{cell}" if cell is not None else str(align_key)
+                    else:
+                        key = ("region", e["region"], cell)
+                        display_key = f"{e['region']}:{cell}" if cell is not None else str(e["region"])
+                    keyed.setdefault(key, (display_key, []))[1].append((r["source"], e))
+            for key, (display_key, items) in keyed.items():
                 if len(items) < 2:
                     continue
                 if dim == "height":
                     vals = {n: e["baseline"] for n, e in items}
                     if max(vals.values()) != min(vals.values()):
-                        findings.append({"rule": rule, dim: size, "key": key, "issue": "baseline differs",
+                        findings.append({"rule": rule, dim: size, "key": display_key, "issue": "baseline differs",
                                          "baseline": vals})
                     sizes = {n: e["size_used"] for n, e in items}
                     if len(set(sizes.values())) > 1:
-                        findings.append({"rule": rule, dim: size, "key": key, "issue": "font size differs",
+                        findings.append({"rule": rule, dim: size, "key": display_key, "issue": "font size differs",
                                          "size": sizes})
                 else:
                     modes = {n: e["align"] for n, e in items}
                     vals = {n: e["anchor"] for n, e in items}
                     tol = 1 if set(modes.values()) == {"center"} else 0
                     if len(set(modes.values())) > 1:
-                        findings.append({"rule": rule, dim: size, "key": key, "issue": "align modes differ",
+                        findings.append({"rule": rule, dim: size, "key": display_key, "issue": "align modes differ",
                                          "align": modes})
                     elif max(vals.values()) - min(vals.values()) > tol:
-                        findings.append({"rule": rule, dim: size, "key": key, "issue": "anchor differs",
+                        findings.append({"rule": rule, dim: size, "key": display_key, "issue": "anchor differs",
                                          "align": next(iter(modes.values())), "anchor": vals})
     return findings, {k: v for k, v in groups.items() if v}
 

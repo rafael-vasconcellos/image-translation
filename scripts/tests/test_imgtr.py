@@ -474,6 +474,40 @@ class ImgtrTests(unittest.TestCase):
                                    {"text": "Hi", "align": "left", "dx": 9, "align_key": None})
         self.assertEqual(r["alignment"]["findings"], [])
 
+    def test_align_key_rejects_non_string_and_blank_values(self):
+        self._blank("blank_a.png")
+        for value in ([], {}, "", "   "):
+            with self.subTest(align_key=value):
+                self.write_spec([{"source": "blank_a.png", "regions": [
+                    {"box": [0, 0, 100, 40], "text": "Hi", "size": 20,
+                     "align_key": value, "erase": {"mode": "none"}}]}])
+                code, r = run("apply", str(self.spec_path), "--src", str(self.src),
+                              "--out", str(self.out), "--dry-run")
+                self.assertEqual(code, 2)
+                self.assertIn("align_key must be a non-empty string or null", r["images"][0]["error"])
+
+    def test_align_key_keeps_cell_specific_alignment_checks_separate(self):
+        for name in ("blank_a.png", "blank_b.png"):
+            Image.new("RGBA", (200, 40), (50, 50, 50, 255)).save(self.src / name)
+        base = {"box": [0, 0, 100, 40], "cell": "all", "text": "Hi", "size": 20,
+                "align": "left", "align_key": "label", "erase": {"mode": "none"}}
+        images = [
+            {"source": "blank_a.png", "cells": {"width": 100, "count": 2},
+             "regions": [dict(base, valign="baseline", baseline=28)]},
+            {"source": "blank_b.png", "cells": {"width": 100, "count": 2},
+             "regions": [dict(base, valign="baseline", baseline=28,
+                              state_overrides={"0": {"baseline": 27, "dx": 5}})]},
+        ]
+        self.write_spec(images)
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src),
+                      "--out", str(self.out), "--dry-run")
+        self.assertEqual(code, 0, r)
+        findings = r["alignment"]["findings"]
+        cell_zero = [f for f in findings if f["key"] == "label:0"]
+        self.assertTrue(any(f["issue"] == "baseline differs" for f in cell_zero), findings)
+        self.assertTrue(any(f["issue"] == "anchor differs" for f in cell_zero), findings)
+        self.assertFalse(any(f["key"] == "label:1" for f in findings), findings)
+
     def test_alignment_flags_a_label_that_shrank_alone(self):
         self._two_blanks()
         code, r = self._align_spec({"text": "Hi", "align": "left", "valign": "baseline", "baseline": 28},
