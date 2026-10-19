@@ -78,7 +78,7 @@ npx skills add rafael-vasconcellos/image-translation
    *"Translate the images in this folder to English."*
    <p align="center">or</p>
 
-   *"This folder contains images that make up a game's UI, which include Japanese text. I would like you to generate new versions of these images with the Japanese text translated into English. Naturally, the new images must have the same dimensions, format, and filenames, and the translated text must be positioned exactly where the original text was. Please translate only the images found in this specific folder—you do not need to concern yourself with anything outside of it. Place the translated images into a subfolder here."*
+   *"This folder contains images that make up a game's UI, which include Japanese text. I would like you to generate new versions of these images with the Japanese text translated into English. Naturally, the new images must have the same dimensions, format, and filenames, and the translated text must be positioned exactly where the original text was. Please translate only the images found in this specific folder and in its subfolders—you do not need to concern yourself with anything outside of it."*
 
 <br/>
 The skill makes the agent work in this order:
