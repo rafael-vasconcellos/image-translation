@@ -28,11 +28,16 @@ def find_font():
 FONT = find_font()
 
 
-def run(*argv):
+def run_raw(*argv):
     buf = io.StringIO()
     with redirect_stdout(buf):
         code = imgtr.main(list(argv))
-    return code, json.loads(buf.getvalue())
+    return code, buf.getvalue()
+
+
+def run(*argv):
+    code, output = run_raw(*argv)
+    return code, json.loads(output)
 
 
 def make_panel(path, labels, header="SETTINGS"):
@@ -105,6 +110,24 @@ class ImgtrTests(unittest.TestCase):
             {"box": [90, 98, 200, 30], "text": "Sound", "align": "left",
              "erase": {"mode": "consensus", "variants": ["back_a.png", "back_b.png", "back_c.png"],
                        "ref_box": [300, 250, 100, 100]}}]}
+
+    def test_apply_and_fonts_outputs_are_pretty_by_default(self):
+        self.write_spec([self.panel_entry()])
+        code, output = run_raw("apply", str(self.spec_path), "--src", str(self.src),
+                               "--out", str(self.out), "--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertIn('\n  "ok": true,', output)
+
+        missing_spec = Path(self._tmp.name) / "missing.json"
+        code, output = run_raw("apply", str(missing_spec), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 1)
+        self.assertIn('\n  "ok": false,', output)
+
+        empty_fonts = Path(self._tmp.name) / "fonts"
+        empty_fonts.mkdir()
+        code, output = run_raw("fonts", "--dir", str(empty_fonts))
+        self.assertEqual(code, 0, output)
+        self.assertIn('\n  "ok": true,', output)
 
     # ---- inventory
     def test_inventory_finds_cells_and_alpha(self):

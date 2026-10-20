@@ -472,7 +472,7 @@ def cmd_fonts(args):
         dest.parent.mkdir(parents=True, exist_ok=True)
         sheet.save(dest)
         out["sample_sheet"] = str(dest)
-    emit(out, args.pretty)
+    emit(out, pretty=True)
     return 0
 
 
@@ -1062,7 +1062,7 @@ def cmd_apply(args):
         raise CliError("--only matched no image in the spec")
     findings, groups = alignment_findings(results)
     emit({"ok": ok, "out": str(out_dir), "images": results,
-          "alignment": {"ok": not findings, "groups": groups, "findings": findings}}, args.pretty)
+          "alignment": {"ok": not findings, "groups": groups, "findings": findings}}, pretty=True)
     if not ok or (args.strict_alignment and findings):
         return 2
     return 0
@@ -1194,7 +1194,8 @@ def build_parser():
     p = argparse.ArgumentParser(prog="imgtr", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"imgtr {__version__}")
-    p.add_argument("--pretty", action="store_true", help="indent the JSON output")
+    p.add_argument("--pretty", action="store_true",
+                   help="indent JSON output (apply and fonts are indented by default)")
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("inventory", help="list images with size, mode, alpha, cell-grid candidates")
@@ -1287,7 +1288,8 @@ def main(argv=None):
     try:
         return args.func(args)
     except CliError as exc:
-        emit({"ok": False, "error": str(exc)})
+        emit({"ok": False, "error": str(exc)},
+             pretty=args.pretty or args.command in {"apply", "fonts"})
         sys.stderr.write(f"imgtr: {exc}\n")
         return exc.code
 

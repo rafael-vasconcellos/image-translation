@@ -16,8 +16,9 @@ measuring, erasing, drawing and checking, so you never write pixel code.
 ## The CLI
 
 Run it as `python <skill_dir>/scripts/imgtr <command>`, where `<skill_dir>` is the folder that
-contains this SKILL.md. Every command prints one JSON document and exits 0 (ok), 1 (usage/I-O error)
-or 2 (a check failed). `--help` on any command explains its options.
+contains this SKILL.md. Every command prints one JSON document; `apply` and `fonts` indent their
+output by default, and `--pretty` indents output for other commands. Commands exit 0 (ok), 1
+(usage/I-O error) or 2 (a check failed). `--help` on any command explains its options.
 
 | Command | Use it to |
 |---|---|

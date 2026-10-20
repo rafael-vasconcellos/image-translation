@@ -108,7 +108,8 @@ Defaults you can rely on:
 python image-translation/scripts/imgtr <command> [options]
 ```
 
-Every command prints one JSON document on stdout (`--pretty` to indent). Exit codes: `0` ok, `1` usage or
+Every command prints one JSON document on stdout. `apply` and `fonts` indent their output by default;
+use `--pretty` to indent the output of other commands. Exit codes: `0` ok, `1` usage or
 I/O error, `2` a check failed (overflow, verify mismatch, apply error).
 
 | Command | What it does |
@@ -227,6 +228,4 @@ python -m unittest discover -s image-translation/scripts/tests -v
 The tests build their own fixtures and need one TrueType font on the machine (they skip otherwise).
 The CLI is a single file with no dependencies beyond Pillow and numpy, to keep it easy to audit and to
 copy next to a skill.
-
-
 
