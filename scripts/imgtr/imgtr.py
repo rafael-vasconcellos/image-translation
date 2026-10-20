@@ -853,7 +853,7 @@ def save_like(src_im, rgba, dest, src_path):
     if src_im.info.get("dpi"):
         kw["dpi"] = src_im.info["dpi"]
     if fmt == "JPEG":
-        kw.update(quality=95, subsampling="keep")
+        kw.update(quality=95, subsampling=0)
         warns.append("lossy_format: JPEG is re-encoded, pixels outside the edit areas will differ slightly")
     elif fmt == "WEBP":
         kw["lossless"] = True

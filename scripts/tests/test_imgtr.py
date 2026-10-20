@@ -408,6 +408,18 @@ class ImgtrTests(unittest.TestCase):
         code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
         self.assertEqual(code, 0, r)
 
+    def test_jpeg_source_is_saved_as_jpeg(self):
+        Image.new("RGB", (120, 60), (20, 20, 20)).save(self.src / "photo.jpg", quality=90)
+        self.write_spec([{"source": "photo.jpg", "regions": [
+            {"box": [10, 10, 100, 40], "text": "Hi", "size": 16,
+             "erase": {"mode": "fill", "color": "#141414"}}]}])
+        code, r = run("apply", str(self.spec_path), "--src", str(self.src), "--out", str(self.out))
+        self.assertEqual(code, 0, r)
+        with Image.open(self.out / "photo.jpg") as im:
+            self.assertEqual((im.format, im.size), ("JPEG", (120, 60)))
+        warns = [w for res in r["images"] for w in res.get("warnings", [])]
+        self.assertTrue(any("lossy_format" in w for w in warns), warns)
+
     def test_measure_reports_widths_and_fit(self):
         code, r = run("measure", "Hi", "A much longer label", "--font", FONT, "--size", "14", "--max-width", "40")
         self.assertEqual(code, 0)
